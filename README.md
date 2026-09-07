@@ -105,7 +105,14 @@ The full [Privacy Policy](PrivacyPolicy/README.md) has the details.
 
 Thanks to our [Ko-fi sponsors](https://ko-fi.com/gamenative) and [GitHub sponsors](https://github.com/sponsors/utkarshdalal?preview=true), including [CodeRabbit](https://coderabbit.link/gnative).
 
-[![Star History Chart](https://star-history.dera.page/svg?repos=utkarshdalal/GameNative&type=Date&theme=dark)](https://star-history.dera.page/#utkarshdalal/GameNative&Date)
+## Acknowledgements & Credits
+
+We gratefully acknowledge the developers, projects, and communities whose work and research made this possible:
+- **Eden Emulator Team & Camille LaVey**: For pioneering direct `Lossless.dll` shader extraction and Vulkan compute frame generation execution on mobile architectures ([Eden PR #4263](https://git.eden-emu.dev/eden-emu/eden/pulls/4263)).
+- **WinNative / WinNative-Emu Team**: For adapting direct `Lossless.dll` execution for Winlator/Android, proving high-performance frame generation across modern Turnip and DXVK configurations ([WinNative PR #697](https://github.com/WinNative-Emu/WinNative/pull/697)).
+- **PancakeTAS & the lsfg-vk project**: For reverse engineering and foundational Vulkan frame generation analysis ([lsfg-vk](https://lsfg-vk.dev/)).
+- **DXVK (Philip Rebohle & contributors)**: For the DXBC to SPIR-V shader compiler ([DXVK](https://github.com/doitsujin/dxvk)).
+- The broader open-source ecosystem: **Wine**, **Proton**, **Mesa / Turnip**, **VKD3D**, **FEX**, **Box64**, and **Winlator**.
 
 ## License
 
