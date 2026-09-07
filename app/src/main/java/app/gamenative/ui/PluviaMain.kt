@@ -1701,6 +1701,7 @@ fun PluviaMain(
                             preLaunchApp(
                                 context = context,
                                 appId = appId,
+                                skipCloudSync = true,
                                 setLoadingDialogVisible = viewModel::setLoadingDialogVisible,
                                 setLoadingProgress = viewModel::setLoadingDialogProgress,
                                 setLoadingMessage = viewModel::setLoadingDialogMessage,
