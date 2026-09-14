@@ -75,6 +75,10 @@ VulkanRendererContext::~VulkanRendererContext() {
             inFlightFences[i] = VK_NULL_HANDLE;
         }
     }
+    if (computeQueryPool != VK_NULL_HANDLE && vk_.DestroyQueryPool) {
+        vk_.DestroyQueryPool(device, computeQueryPool, nullptr);
+        computeQueryPool = VK_NULL_HANDLE;
+    }
     vkd_unload();
     vk_.DestroyCommandPool(device, cmdPool, nullptr);
     vk_.DestroyRenderPass(device, renderPass, nullptr);
@@ -176,6 +180,11 @@ void VulkanRendererContext::loadDeviceDispatch() {
     LOAD_D2(WaitForFences);
     LOAD_D2(ResetFences);
     LOAD_D2(GetFenceStatus);
+    LOAD_D2(CreateQueryPool);
+    LOAD_D2(DestroyQueryPool);
+    LOAD_D2(CmdResetQueryPool);
+    LOAD_D2(CmdWriteTimestamp);
+    LOAD_D2(GetQueryPoolResults);
 
     vk_.GetAndroidHardwareBufferPropertiesANDROID =
         (PFN_vkGetAndroidHardwareBufferPropertiesANDROID)d("vkGetAndroidHardwareBufferPropertiesANDROID");
@@ -340,9 +349,6 @@ void VulkanRendererContext::createSwapchain() {
     uint32_t fmtN=0; vk_.GetPhysicalDeviceSurfaceFormatsKHR(physicalDevice,surface,&fmtN,nullptr);
     std::vector<VkSurfaceFormatKHR> fmts(fmtN); vk_.GetPhysicalDeviceSurfaceFormatsKHR(physicalDevice,surface,&fmtN,fmts.data());
     swapchainFmt = VK_FORMAT_R8G8B8A8_UNORM;
-    uint32_t imgCount = caps.minImageCount + 1 + framegenExtraImages();
-    if (caps.maxImageCount > 0 && imgCount > caps.maxImageCount) imgCount = caps.maxImageCount;
-
     bool transferDstCapable = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
     swapchainTransferDst = framegenRequested && transferDstCapable;
     framegenSupported = transferDstCapable && compositeFormatSupported();
@@ -351,14 +357,21 @@ void VulkanRendererContext::createSwapchain() {
     vk_.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice,surface,&pmCount,nullptr);
     availablePresentModes.resize(pmCount);
     vk_.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice,surface,&pmCount,availablePresentModes.data());
+    VkPresentModeKHR effectiveRequested = requestedPresentMode;
+    if (framegenRequested) {
+        effectiveRequested = VK_PRESENT_MODE_MAILBOX_KHR;
+    }
     VkPresentModeKHR presentMode=VK_PRESENT_MODE_FIFO_KHR;
-    for (auto pm:availablePresentModes) if(pm==requestedPresentMode){presentMode=pm;break;}
+    for (auto pm:availablePresentModes) if(pm==effectiveRequested){presentMode=pm;break;}
     if(verboseLog){
         std::string pmList;
         for(auto pm:availablePresentModes) pmList+=std::to_string((int)pm)+" ";
-        RLOG("createSwapchain: %dx%d fmt=%d supportedPresentModes=[%s] chosen=%d req=%d",
-            swapchainExt.width,swapchainExt.height,(int)swapchainFmt,pmList.c_str(),(int)presentMode,(int)requestedPresentMode);
+        RLOG("createSwapchain: %dx%d fmt=%d supportedPresentModes=[%s] chosen=%d req=%d effective=%d",
+            swapchainExt.width,swapchainExt.height,(int)swapchainFmt,pmList.c_str(),(int)presentMode,(int)requestedPresentMode,(int)effectiveRequested);
     }
+
+    uint32_t imgCount = caps.minImageCount + (presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR ? 0 : 1) + framegenExtraImages();
+    if (caps.maxImageCount > 0 && imgCount > caps.maxImageCount) imgCount = caps.maxImageCount;
 
     VkSurfaceTransformFlagBitsKHR pre=
         (caps.supportedTransforms&VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)?
@@ -544,6 +557,18 @@ void VulkanRendererContext::createSyncObjects() {
         for (uint32_t g = 0; g < VKR_LSFG_MAX_GENERATIONS; g++) {
             if (vk_.CreateSemaphore(device, &si, nullptr, &imgAvailGenSems[i][g]) != VK_SUCCESS)
                 throw std::runtime_error("sync gen");
+        }
+    }
+    VkPhysicalDeviceProperties devProps{};
+    vk_.GetPhysicalDeviceProperties(physicalDevice, &devProps);
+    if (devProps.limits.timestampComputeAndGraphics && devProps.limits.timestampPeriod > 0.0f && vk_.CreateQueryPool) {
+        timestampPeriod = devProps.limits.timestampPeriod;
+        VkQueryPoolCreateInfo qpci{};
+        qpci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        qpci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qpci.queryCount = 2 * MAX_FRAMES_IN_FLIGHT;
+        if (vk_.CreateQueryPool(device, &qpci, nullptr, &computeQueryPool) != VK_SUCCESS) {
+            computeQueryPool = VK_NULL_HANDLE;
         }
     }
 }
@@ -794,6 +819,11 @@ void VulkanRendererContext::recordCmdBuf(VkCommandBuffer cb, VkFramebuffer targe
 {
     VkCommandBufferBeginInfo bi{}; bi.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     if (vk_.BeginCommandBuffer(cb,&bi)!=VK_SUCCESS) throw std::runtime_error("begin cb");
+
+    if (computeTimingEnabled.load(std::memory_order_relaxed) && computeQueryPool != VK_NULL_HANDLE && vk_.CmdResetQueryPool && vk_.CmdWriteTimestamp) {
+        vk_.CmdResetQueryPool(cb, computeQueryPool, currentFrame * 2, 2);
+        vk_.CmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, computeQueryPool, currentFrame * 2);
+    }
 
     ahbTransitions.clear(); preUpload.clear(); postUpload.clear();
 
@@ -1065,6 +1095,28 @@ void VulkanRendererContext::renderLoop() {
         if (!isRunning) break;
 
         if (swapchain == VK_NULL_HANDLE || cmdBufs.empty()) continue;
+
+        // Handle cursor-only wakeups (when mouse moved but game did not produce a new frame).
+        // Rate-limit to the display refresh interval so high-polling mice (e.g. 500-1000 Hz)
+        // do not saturate the Vulkan swapchain with redundant composite presents.
+        if (cursorMoved.load(std::memory_order_relaxed) && !needsRender.load(std::memory_order_relaxed)) {
+            const int32_t mhz = framegenRefreshMhz.load(std::memory_order_relaxed);
+            const float refreshHz = mhz > 10000 ? ((float)mhz * 0.001f) : 60.0f;
+            const float minIntervalMs = 1000.0f / refreshHz;
+            const auto now = std::chrono::steady_clock::now();
+            const float elapsedSinceRender = std::chrono::duration<float, std::milli>(now - lastRenderTime).count();
+            if (elapsedSinceRender < minIntervalMs) {
+                const int sleepMs = static_cast<int>(minIntervalMs - elapsedSinceRender + 0.5f);
+                if (sleepMs > 0) {
+                    std::unique_lock<std::mutex> lk(dirtyMutex);
+                    dirtyCV.wait_for(lk, std::chrono::milliseconds(sleepMs), [this] {
+                        return !isRunning || needsRender.load(std::memory_order_relaxed) || fbResized.load(std::memory_order_relaxed);
+                    });
+                    if (!isRunning) break;
+                }
+            }
+        }
+
         try { renderFrame(); } catch(...) {}
     }
 }
@@ -1088,8 +1140,16 @@ void VulkanRendererContext::flushDeleteQueue() {
 void VulkanRendererContext::renderFrame() {
     std::shared_lock<std::shared_mutex> frameLock(frameMutex);
 
-    needsRender.store(false,std::memory_order_relaxed);
-    cursorMoved.store(false,std::memory_order_relaxed);
+    // Distinguish whether this frame is driven by new game/WSI content or solely by a cursor position update.
+    // hasNewFrame determines if LSFG interpolation, telemetry (base FPS), and GPU compute timers should run.
+    const bool hasNewFrame = needsRender.exchange(false, std::memory_order_relaxed);
+    cursorMoved.store(false, std::memory_order_relaxed);
+
+    const auto nowTime = std::chrono::steady_clock::now();
+    lastRenderTime = nowTime;
+    if (hasNewFrame) {
+        lastRealFrameTime = nowTime;
+    }
 
     if (surfaceDetached.load(std::memory_order_acquire)) return;
     if (scanoutActive.load()) {
@@ -1132,6 +1192,33 @@ ok=true;}catch(...){}
                (!vk_.GetFenceStatus || vk_.GetFenceStatus(device, inFlightFences[currentFrame]) == VK_NOT_READY)) {
         vk_.WaitForFences(device,1,&inFlightFences[currentFrame],VK_TRUE,UINT64_MAX);
         currentFenceWaited = true;
+    }
+
+    // Retrieve GPU compute execution time for LSFG passes from previous frame in this swapchain slot.
+    // The fence for currentFrame has already completed above, guaranteeing timestamp availability without blocking.
+    if (queryWritten[currentFrame]) {
+        float ms = -1.0f;
+        if (computeQueryPool != VK_NULL_HANDLE && vk_.GetQueryPoolResults) {
+            uint64_t ts[2] = {0, 0};
+            VkResult qr = vk_.GetQueryPoolResults(device, computeQueryPool, currentFrame * 2, 2,
+                                                  sizeof(ts), ts, sizeof(uint64_t),
+                                                  VK_QUERY_RESULT_64_BIT);
+            if (qr == VK_SUCCESS && ts[1] >= ts[0] && timestampPeriod > 0.0f) {
+                ms = (float)(ts[1] - ts[0]) * timestampPeriod * 1e-6f;
+            }
+        }
+        // Fallback: use CPU submit-to-fence delta if hardware timestamp query failed
+        if (ms < 0.0f && frameSubmitTime[currentFrame].time_since_epoch().count() > 0) {
+            auto now = std::chrono::steady_clock::now();
+            ms = std::chrono::duration<float, std::milli>(now - frameSubmitTime[currentFrame]).count();
+        }
+        if (ms >= 0.0f) {
+            // Apply exponential moving average (0.8 / 0.2) to smooth jitter in the HUD Delay readout
+            float prev = lastComputeDurationMs.load(std::memory_order_relaxed);
+            float smoothed = prev > 0.0f ? (prev * 0.8f + ms * 0.2f) : ms;
+            lastComputeDurationMs.store(smoothed, std::memory_order_relaxed);
+        }
+        queryWritten[currentFrame] = false;
     }
 
     bool via_composite = framegenRequested && framegenSupported && swapchainTransferDst && !toXr;
@@ -1192,7 +1279,9 @@ ok=true;}catch(...){}
     }
 
     uint32_t framegen_planned = 0;
-    if (via_composite && lsfg) {
+    // Only plan and execute LSFG frame generation when new source frame content has arrived.
+    // Cursor-only redraws must not run redundant compute passes on identical visual frames.
+    if (via_composite && lsfg && hasNewFrame) {
         const int32_t pending_mhz = framegenRefreshMhz.load(std::memory_order_relaxed);
         framegenRefreshRate = pending_mhz > 0 ? (float)pending_mhz / 1000.0f : 0.0f;
         vkr_lsfg_set_refresh_rate(lsfg, framegenRefreshRate);
@@ -1321,7 +1410,8 @@ ok=true;}catch(...){}
         ox, oy, sx, sy, cw, ch, ptrX, ptrY, curHotX, curHotY, curW, curH, effectiveCurVis);
 
     if (compositeTarget) {
-        if (lsfg && framegen_capacity > 0) {
+        // Run LSFG compute passes only for real game frames, avoiding spurious interpolation on cursor moves
+        if (lsfg && framegen_capacity > 0 && hasNewFrame) {
             uint32_t guestW = containerWidth > 0 ? (uint32_t)containerWidth : swapchainExt.width;
             uint32_t guestH = containerHeight > 0 ? (uint32_t)containerHeight : swapchainExt.height;
             for (const auto& de : frameDraws) {
@@ -1393,6 +1483,12 @@ ok=true;}catch(...){}
         return true;
     };
 
+    // Record end timestamp for LSFG compute pass execution if the Delay HUD metric is active
+    if (hasNewFrame && computeTimingEnabled.load(std::memory_order_relaxed) && computeQueryPool != VK_NULL_HANDLE && vk_.CmdWriteTimestamp) {
+        vk_.CmdWriteTimestamp(cmdBufs[currentFrame], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, computeQueryPool, currentFrame * 2 + 1);
+        queryWritten[currentFrame] = true;
+    }
+
     VkResult endStatus = vk_.EndCommandBuffer(cmdBufs[currentFrame]);
     if (endStatus != VK_SUCCESS) {
         RLOG_E("renderFrame: EndCommandBuffer failed status=%d", (int)endStatus);
@@ -1437,6 +1533,9 @@ ok=true;}catch(...){}
     si.pCommandBuffers = &cmdBufs[currentFrame];
 
     vk_.ResetFences(device, 1, &inFlightFences[currentFrame]);
+    if (computeTimingEnabled.load(std::memory_order_relaxed)) {
+        frameSubmitTime[currentFrame] = std::chrono::steady_clock::now();
+    }
     if (vk_.QueueSubmit(graphicsQueue, 1, &si, inFlightFences[currentFrame]) != VK_SUCCESS) {
         recoverAcquiredFrame();
         return;
@@ -1473,7 +1572,11 @@ ok=true;}catch(...){}
         pi.pImageIndices = &imgIdx;
         res = vk_.QueuePresentKHR(graphicsQueue, &pi);
         if (res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR) {
-            presentedFrames.fetch_add(1, std::memory_order_relaxed);
+            // Only increment presented frame count for real game frames.
+            // Standalone cursor redraws are excluded so mouse movement does not inflate the base FPS counter.
+            if (hasNewFrame) {
+                presentedFrames.fetch_add(1, std::memory_order_relaxed);
+            }
         }
         if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_ERROR_SURFACE_LOST_KHR || genPresentOutOfDate) {
             fbResized.store(true);
@@ -1544,8 +1647,26 @@ void VulkanRendererContext::setTransform(float ox, float oy, float sx, float sy)
 }
 
 void VulkanRendererContext::updatePointerPosition(short x, short y) {
-    pointerX.store(x); pointerY.store(y);
-    if (cursorVisible.load()) { cursorMoved.store(true); dirtyCV.notify_one(); }
+    pointerX.store(x, std::memory_order_relaxed);
+    pointerY.store(y, std::memory_order_relaxed);
+    if (!cursorVisible.load(std::memory_order_relaxed)) return;
+
+    // When LSFG is active, the frame generation pipeline is already compositing and presenting
+    // at the display's peak refresh rate (e.g. 120/165 Hz). Standalone cursor-only swapchain presents
+    // would steal swapchain images from LSFG's queue and introduce frame pacing stalls.
+    // Therefore, under LSFG we let active game frames render the cursor smoothly without separate wakeups.
+    // When LSFG is OFF, standalone cursor wakeups remain active so the cursor renders at full display Hz.
+    const bool isLsfgActive = framegenRequested && (lsfg != nullptr);
+    if (isLsfgActive) {
+        auto now = std::chrono::steady_clock::now();
+        float elapsedSinceReal = std::chrono::duration<float, std::milli>(now - lastRealFrameTime).count();
+        if (elapsedSinceReal < 100.0f) {
+            return;
+        }
+    }
+
+    cursorMoved.store(true, std::memory_order_relaxed);
+    dirtyCV.notify_one();
 }
 
 void VulkanRendererContext::setCursorVisible(bool v) {
@@ -1762,10 +1883,10 @@ void VulkanRendererContext::setPresentMode(VkPresentModeKHR mode) {
     bool supported = false;
     for (auto pm : availablePresentModes) if (pm == mode) { supported = true; break; }
     VkPresentModeKHR target = supported ? mode : VK_PRESENT_MODE_FIFO_KHR;
-    RLOG("setPresentMode: requested=%d supported=%d -> applying=%d",
-        (int)mode, (int)supported, (int)target);
-    if (requestedPresentMode==target) { RLOG("setPresentMode: already set, skipping"); return; }
-    requestedPresentMode=target;
+    RLOG("setPresentMode: requested=%d supported=%d -> applying=%d (framegenRequested=%d)",
+        (int)mode, (int)supported, (int)target, (int)framegenRequested);
+    if (requestedPresentMode == target) return;
+    requestedPresentMode = target;
     fbResized.store(true); dirtyCV.notify_one();
 }
 

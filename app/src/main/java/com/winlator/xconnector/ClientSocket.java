@@ -46,8 +46,12 @@ public class ClientSocket {
 
     public void write(ByteBuffer data) throws IOException {
         int bytesWritten = write(fd, data, data.limit());
-        if (bytesWritten >= 0) {
+        if (bytesWritten == data.limit()) {
             data.position(bytesWritten);
+        }
+        else if (bytesWritten > 0) {
+            data.position(bytesWritten);
+            throw new IOException("Partial socket write (" + bytesWritten + " of " + data.limit() + ")");
         }
         else throw new IOException("Failed to write data.");
     }

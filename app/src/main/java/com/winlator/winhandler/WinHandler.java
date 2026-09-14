@@ -542,7 +542,7 @@ public class WinHandler {
             if (rumblePollerThreads != null && rumblePollerThreads.length > 0) {
                 for (Thread t : rumblePollerThreads) {
                     if (t != null) {
-                        t.join();
+                        t.join(500);
                     }
                 }
             }

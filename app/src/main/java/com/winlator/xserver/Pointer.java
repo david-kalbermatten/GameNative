@@ -58,8 +58,11 @@ public class Pointer {
     }
 
     public void setPosition(int x, int y) {
-        setX(x);
-        setY(y);
+        short newX = (short)x;
+        short newY = (short)y;
+        if (newX == this.x && newY == this.y) return;
+        this.x = newX;
+        this.y = newY;
         triggerOnPointerMove(this.x, this.y);
     }
 

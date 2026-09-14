@@ -377,3 +377,15 @@ Java_com_winlator_renderer_VulkanRenderer_nativeGetSourceFrameCount(JNIEnv*, job
     return r ? (jlong)r->getSourceFrameCount() : 0;
 }
 
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_winlator_renderer_VulkanRenderer_nativeGetComputeDurationMs(JNIEnv*, jobject, jlong handle) {
+    auto* r = reinterpret_cast<VulkanRendererContext*>(handle);
+    return r ? (jfloat)r->getComputeDurationMs() : 0.0f;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_winlator_renderer_VulkanRenderer_nativeSetComputeTimingEnabled(JNIEnv*, jobject, jlong handle, jboolean enabled) {
+    auto* r = reinterpret_cast<VulkanRendererContext*>(handle);
+    if (r) r->setComputeTimingEnabled(enabled);
+}
+

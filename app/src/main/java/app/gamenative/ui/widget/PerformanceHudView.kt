@@ -54,6 +54,10 @@ class PerformanceHudView(
     context: Context,
     private val fpsProvider: () -> Float,
     private val outputFpsProvider: (() -> Float)? = null,
+    private val computeDelayProvider: (() -> Float)? = null,
+    private val onComputeDelayDemandChanged: ((Boolean) -> Unit)? = null,
+    private val displayRefreshRateProvider: (() -> Float)? = null,
+    private val presentModeProvider: (() -> String)? = null,
     initialConfig: PerformanceHudConfig = PerformanceHudConfig(),
     initialCompactMode: Boolean = false,
 ) : FrameLayout(context) {
@@ -92,6 +96,14 @@ class PerformanceHudView(
         graphColor = 0xFF7CFF6B.toInt(),
         graphScaleMode = GraphScaleMode.FPS_DYNAMIC,
     )
+    private val computeDelayMetric = createMetricViews(
+        id = MetricId.COMPUTE_DELAY,
+        textColor = 0xFF80CBC4.toInt(),
+    )
+    private val refreshRateMetric = createMetricViews(
+        id = MetricId.DISPLAY_REFRESH_RATE,
+        textColor = 0xFF81C784.toInt(),
+    )
     private val cpuMetric = createMetricViews(
         id = MetricId.CPU,
         textColor = 0xFF42A5F5.toInt(),
@@ -117,6 +129,8 @@ class PerformanceHudView(
 
     private val allMetrics = listOf(
         fpsMetric,
+        computeDelayMetric,
+        refreshRateMetric,
         cpuMetric,
         gpuMetric,
         ramMetric,
@@ -158,7 +172,13 @@ class PerformanceHudView(
         requestLayout()
     }
 
+    private fun updateComputeTimingDemand() {
+        val demand = !isPaused && isAttachedToWindow && config.showComputeDelay
+        onComputeDelayDemandChanged?.invoke(demand)
+    }
+
     fun setConfig(config: PerformanceHudConfig) {
+        val oldShowComputeDelay = this.config.showComputeDelay
         if (this.config == config) {
             return
         }
@@ -167,12 +187,16 @@ class PerformanceHudView(
         applyAppearance()
         lastSnapshot?.let(::applySnapshotText) ?: refreshVisibleMetrics()
         refreshVisibleMetrics()
+        if (oldShowComputeDelay != config.showComputeDelay) {
+            updateComputeTimingDemand()
+        }
     }
 
     fun pause() {
         if (!isPaused) {
             isPaused = true
             stopUpdates()
+            updateComputeTimingDemand()
         }
     }
 
@@ -182,6 +206,7 @@ class PerformanceHudView(
             if (isAttachedToWindow) {
                 startUpdates()
             }
+            updateComputeTimingDemand()
         }
     }
 
@@ -190,10 +215,12 @@ class PerformanceHudView(
         if (!isPaused) {
             startUpdates()
         }
+        updateComputeTimingDemand()
     }
 
     override fun onDetachedFromWindow() {
         stopUpdates()
+        onComputeDelayDemandChanged?.invoke(false)
         super.onDetachedFromWindow()
     }
 
@@ -213,8 +240,10 @@ class PerformanceHudView(
                 val currentFps = if (rawFps.isFinite()) rawFps.coerceAtLeast(0f) else 0f
                 val rawOutputFps = outputFpsProvider?.invoke() ?: 0f
                 val currentOutputFps = if (rawOutputFps.isFinite()) rawOutputFps.coerceAtLeast(0f) else 0f
+                val rawComputeDelay = if (config.showComputeDelay) (computeDelayProvider?.invoke() ?: 0f) else 0f
+                val currentComputeDelay = if (rawComputeDelay.isFinite()) rawComputeDelay.coerceAtLeast(0f) else 0f
                 val snapshot = withContext(Dispatchers.IO) {
-                    collectSnapshot(currentFps, currentOutputFps)
+                    collectSnapshot(currentFps, currentOutputFps, currentComputeDelay)
                 }
                 renderSnapshot(snapshot)
                 delay(UPDATE_INTERVAL_MS)
@@ -309,7 +338,7 @@ class PerformanceHudView(
         }
     }
 
-    private fun collectSnapshot(currentFps: Float, currentOutputFps: Float = 0f): HudSnapshot {
+    private fun collectSnapshot(currentFps: Float, currentOutputFps: Float = 0f, computeDelayMs: Float = 0f): HudSnapshot {
         val cpuPercent = cpuSampler.sample()?.percent
         val gpuPercent = gpuSampler.sample()?.percent
         val batterySnapshot = collectBatterySnapshot()
@@ -318,6 +347,24 @@ class PerformanceHudView(
         } else {
             String.format(Locale.US, "FPS %.1f", currentFps)
         }
+        val refreshHz = if (config.showComputeDelay || config.showDisplayRefreshRate) {
+            displayRefreshRateProvider?.invoke()?.takeIf { it > 10f } ?: 60f
+        } else 60f
+        val computeDelayText = if (config.showComputeDelay) {
+            val presentMode = presentModeProvider?.invoke().orEmpty().ifEmpty { "mailbox" }
+            val hasFg = currentOutputFps > 0f
+            val delayMs = calculateClickToFrameDelay(
+                baseFps = currentFps,
+                hasFg = hasFg,
+                fgGpuDurationMs = computeDelayMs,
+                displayRefreshHz = refreshHz,
+                presentMode = presentMode,
+            )
+            String.format(Locale.US, "DL %.1fms", delayMs)
+        } else null
+        val displayRefreshRateText = if (config.showDisplayRefreshRate) {
+            String.format(Locale.US, "%dHz", refreshHz.roundToInt())
+        } else null
         return HudSnapshot(
             fpsValue = if (currentOutputFps > 0f) currentOutputFps else currentFps,
             cpuValue = cpuPercent?.toFloat(),
@@ -339,7 +386,54 @@ class PerformanceHudView(
                 ?.let { "GPU TEMP ${it}°C" },
             fan = readFanText(),
             tune = readTuneText(),
+            computeDelay = computeDelayText,
+            displayRefreshRate = displayRefreshRateText,
         )
+    }
+
+    private fun calculateClickToFrameDelay(
+        baseFps: Float,
+        hasFg: Boolean,
+        fgGpuDurationMs: Float,
+        displayRefreshHz: Float,
+        presentMode: String,
+    ): Float {
+        val fps = if (baseFps > 1f) baseFps else 60f
+        val refreshHz = if (displayRefreshHz > 10f) displayRefreshHz else 60f
+
+        // 1. Base Game Latency (Input sampling to render complete & swapchain queue buffering)
+        // Expressed in multiples of gameFrameMs according to swapchain queueing:
+        // - Immediate: 1.5 frames (input + render execution + immediate tear) = 50.0 ms at 30 FPS
+        // - Mailbox / Auto: 2.0 frames (triple buffering, non-blocking queue) = 66.6 ms at 30 FPS
+        // - FiFo: 3.0 frames (blocking VSync queue backpressure) = 100.0 ms at 30 FPS
+        val gameFrameMs = 1000f / fps
+        val baseDelayMs = when (presentMode.lowercase(Locale.ROOT)) {
+            "immediate" -> 1.5f * gameFrameMs
+            "fifo" -> 3.0f * gameFrameMs
+            "relaxed" -> if (fps >= refreshHz) 2.0f * gameFrameMs else 1.5f * gameFrameMs
+            else -> 2.0f * gameFrameMs // Mailbox / Auto
+        }
+
+        // 2. Frame Generation Pipeline Latency:
+        // Optical flow frame generation holds the prior frame by half an interpolation interval (16.7 ms at 30 FPS)
+        // plus the actual measured GPU execution duration of the LSFG shader pass (~8.5 ms baseline)
+        val fgDelayMs = if (hasFg) {
+            val measuredGpu = if (fgGpuDurationMs > 0.05f) fgGpuDurationMs else 8.5f
+            (0.5f * gameFrameMs) + measuredGpu
+        } else {
+            0f
+        }
+
+        // 3. Physical Display Scanout & Refresh Rate Bonus:
+        // High refresh rate panels (e.g. 120Hz, 144Hz) scan out frames faster to mid-screen photons
+        // relative to standard 60Hz panel scanout (~4.4 ms savings at 120Hz)
+        val scanoutBonusMs = if (refreshHz > 60f) {
+            0.53f * ((1000f / 60f) - (1000f / refreshHz))
+        } else {
+            0f
+        }
+
+        return (baseDelayMs + fgDelayMs - scanoutBonusMs).coerceAtLeast(1.0f)
     }
 
     private fun readFanText(): String? {
@@ -434,6 +528,8 @@ class PerformanceHudView(
 
     private fun applySnapshotText(snapshot: HudSnapshot) {
         updateMetricText(fpsMetric, snapshot.fps)
+        updateMetricText(computeDelayMetric, snapshot.computeDelay)
+        updateMetricText(refreshRateMetric, snapshot.displayRefreshRate)
         updateMetricText(cpuMetric, snapshot.cpu)
         updateMetricText(gpuMetric, snapshot.gpu)
         updateMetricText(ramMetric, snapshot.ram)
@@ -457,6 +553,8 @@ class PerformanceHudView(
     private fun refreshVisibleMetrics() {
         val visibleMetrics = buildList {
             addMetricIfVisible(fpsMetric, config.showFrameRate, config.showFrameRateGraph)
+            addMetricIfVisible(computeDelayMetric, config.showComputeDelay)
+            addMetricIfVisible(refreshRateMetric, config.showDisplayRefreshRate)
             addMetricIfVisible(cpuMetric, config.showCpuUsage, config.showCpuUsageGraph)
             addMetricIfVisible(gpuMetric, config.showGpuUsage, config.showGpuUsageGraph)
             addMetricIfVisible(ramMetric, config.showRamUsage)

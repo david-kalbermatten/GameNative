@@ -312,3 +312,19 @@ uint64_t VulkanRendererContext::getRealFrameCount() const {
 uint64_t VulkanRendererContext::getSourceFrameCount() const {
     return framegenSourceFrames.load(std::memory_order_relaxed);
 }
+
+float VulkanRendererContext::getComputeDurationMs() const {
+    return lastComputeDurationMs.load(std::memory_order_relaxed);
+}
+
+void VulkanRendererContext::setComputeTimingEnabled(bool enabled) {
+    computeTimingEnabled.store(enabled, std::memory_order_relaxed);
+    if (!enabled) {
+        lastComputeDurationMs.store(0.0f, std::memory_order_relaxed);
+        for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            queryWritten[i] = false;
+            frameSubmitTime[i] = {};
+        }
+    }
+}
+

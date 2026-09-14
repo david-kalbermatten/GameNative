@@ -173,7 +173,7 @@ fun GraphicsTabContent(state: ContainerConfigState, default: Boolean = false) {
                 onItemSelected = { idx ->
                     state.presentModeIndex.value = idx
                     val cfg = KeyValueSet(config.graphicsDriverConfig)
-                    cfg.put("presentMode", state.presentModes[idx])
+                    cfg.put("presentMode", state.presentModeValues[idx])
                     state.config.value = config.copy(graphicsDriverConfig = cfg.toString())
                 },
             )
@@ -212,16 +212,6 @@ fun GraphicsTabContent(state: ContainerConfigState, default: Boolean = false) {
                     )
                 }
             }
-            SettingsListDropdown(
-                colors = settingsTileColors(),
-                title = { Text(text = stringResource(R.string.renderer_present_modes)) },
-                value = state.rendererPresentModeIndex.value.coerceIn(0, state.rendererPresentModes.lastIndex.coerceAtLeast(0)),
-                items = state.rendererPresentModes,
-                onItemSelected = { idx ->
-                    state.rendererPresentModeIndex.value = idx
-                    state.config.value = config.copy(rendererPresentMode = state.rendererPresentModes[idx])
-                },
-            )
             SettingsListDropdown(
                 colors = settingsTileColors(),
                 title = { Text(text = stringResource(R.string.resource_type)) },
@@ -403,6 +393,18 @@ fun GraphicsTabContent(state: ContainerConfigState, default: Boolean = false) {
                     )
                 }
             }
+            SettingsListDropdown(
+                colors = settingsTileColors(),
+                title = { Text(text = stringResource(R.string.present_modes)) },
+                value = state.presentModeIndex.value.coerceIn(0, state.presentModes.lastIndex.coerceAtLeast(0)),
+                items = state.presentModes,
+                onItemSelected = { idx ->
+                    state.presentModeIndex.value = idx
+                    val cfg = KeyValueSet(config.graphicsDriverConfig)
+                    cfg.put("presentMode", state.presentModeValues[idx])
+                    state.config.value = config.copy(graphicsDriverConfig = cfg.toString())
+                },
+            )
         }
 
         // Frame Generation (LSFG) — only available for Bionic containers when Display Renderer is Vulkan
@@ -436,7 +438,16 @@ fun GraphicsTabContent(state: ContainerConfigState, default: Boolean = false) {
                     if (!isDllImported) {
                         showLsfgDialog = true
                     } else {
-                        state.config.value = config.copy(lsfgEnabled = checked)
+                        val newConfig = if (checked) {
+                            val targetPm = if ("mailbox" in state.rendererPresentModeValues) "mailbox"
+                                           else state.rendererPresentModeValues.firstOrNull() ?: "fifo"
+                            val targetIdx = state.rendererPresentModeValues.indexOf(targetPm).coerceAtLeast(0)
+                            state.rendererPresentModeIndex.value = targetIdx
+                            config.copy(lsfgEnabled = true, rendererPresentMode = targetPm)
+                        } else {
+                            config.copy(lsfgEnabled = false)
+                        }
+                        state.config.value = newConfig
                     }
                 },
             )
@@ -450,7 +461,11 @@ fun GraphicsTabContent(state: ContainerConfigState, default: Boolean = false) {
                     },
                     onInstallSuccess = {
                         refreshKey++
-                        state.config.value = state.config.value.copy(lsfgEnabled = true)
+                        val targetPm = if ("mailbox" in state.rendererPresentModeValues) "mailbox"
+                                       else state.rendererPresentModeValues.firstOrNull() ?: "fifo"
+                        val targetIdx = state.rendererPresentModeValues.indexOf(targetPm).coerceAtLeast(0)
+                        state.rendererPresentModeIndex.value = targetIdx
+                        state.config.value = state.config.value.copy(lsfgEnabled = true, rendererPresentMode = targetPm)
                     },
                 )
             }
@@ -480,6 +495,22 @@ private fun DxWrapperSection(state: ContainerConfigState) {
             state.config.value = config.copy(displayRenderer = StringUtils.parseIdentifier(state.displayRenderers[it]))
         },
     )
+    val isVulkan = StringUtils.parseIdentifier(state.displayRenderers.getOrNull(state.displayRendererIndex.value).orEmpty()) == "vulkan"
+    if (isVulkan) {
+        val context = LocalContext.current
+        val isFrameGenActive = config.lsfgEnabled && LosslessScaling.getDllFile(context).isFile
+        SettingsListDropdown(
+            colors = settingsTileColors(),
+            enabled = !isFrameGenActive,
+            title = { Text(text = stringResource(R.string.renderer_present_modes)) },
+            value = state.rendererPresentModeIndex.value.coerceIn(0, state.rendererPresentModes.lastIndex.coerceAtLeast(0)),
+            items = state.rendererPresentModes,
+            onItemSelected = { idx ->
+                state.rendererPresentModeIndex.value = idx
+                state.config.value = config.copy(rendererPresentMode = state.rendererPresentModeValues[idx])
+            },
+        )
+    }
     // Show color correction toggle only for ASurfaceRenderer (SurfaceFlinger)
     if (StringUtils.parseIdentifier(state.displayRenderers.getOrNull(state.displayRendererIndex.value).orEmpty()) == "surfaceflinger") {
         SettingsSwitch(

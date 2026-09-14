@@ -217,6 +217,8 @@ private fun applyPerformanceHudPreset(
             showFrameRateGraph = false,
             showCpuUsageGraph = false,
             showGpuUsageGraph = false,
+            showComputeDelay = false,
+            showDisplayRefreshRate = false,
         )
 
         PerformanceHudPreset.ESSENTIAL -> currentConfig.copy(
@@ -234,6 +236,8 @@ private fun applyPerformanceHudPreset(
             showFrameRateGraph = false,
             showCpuUsageGraph = false,
             showGpuUsageGraph = false,
+            showComputeDelay = false,
+            showDisplayRefreshRate = false,
         )
 
         PerformanceHudPreset.BATTERY -> currentConfig.copy(
@@ -251,6 +255,8 @@ private fun applyPerformanceHudPreset(
             showFrameRateGraph = true,
             showCpuUsageGraph = false,
             showGpuUsageGraph = false,
+            showComputeDelay = false,
+            showDisplayRefreshRate = false,
         )
 
         PerformanceHudPreset.FULL -> currentConfig.copy(
@@ -268,6 +274,8 @@ private fun applyPerformanceHudPreset(
             showFrameRateGraph = true,
             showCpuUsageGraph = true,
             showGpuUsageGraph = true,
+            showComputeDelay = true,
+            showDisplayRefreshRate = true,
         )
     }
 }
@@ -290,7 +298,9 @@ private fun matchesPerformanceHudPreset(
         currentConfig.showGpuTemperature == presetConfig.showGpuTemperature &&
         currentConfig.showFrameRateGraph == presetConfig.showFrameRateGraph &&
         currentConfig.showCpuUsageGraph == presetConfig.showCpuUsageGraph &&
-        currentConfig.showGpuUsageGraph == presetConfig.showGpuUsageGraph
+        currentConfig.showGpuUsageGraph == presetConfig.showGpuUsageGraph &&
+        currentConfig.showComputeDelay == presetConfig.showComputeDelay &&
+        currentConfig.showDisplayRefreshRate == presetConfig.showDisplayRefreshRate
 }
 
 // fpsLimiterSteps / fpsLimiterCurrentIndex / fpsLimiterProgress /
@@ -966,6 +976,7 @@ fun QuickMenu(
                                             onTargetRateChanged = { rate ->
                                                 lsfgTargetRate = rate
                                                 container?.let {
+                                                    it.putExtra(app.gamenative.utils.LsfgVkManager.EXTRA_TARGET_RATE, rate.toString())
                                                     app.gamenative.utils.LsfgQuickMenuHelper.applyTargetRate(it, rate)
                                                 }
                                                 performance.onTargetRateChanged(rate)
@@ -1464,6 +1475,26 @@ private fun PerformanceHudQuickMenuTab(
             onToggle = {
                 onPerformanceHudConfigChanged(
                     performanceHudConfig.copy(showFrameRateGraph = !performanceHudConfig.showFrameRateGraph),
+                )
+            },
+            accentColor = accentColor,
+        )
+        QuickMenuToggleRow(
+            title = stringResource(R.string.performance_hud_compute_delay),
+            enabled = performanceHudConfig.showComputeDelay,
+            onToggle = {
+                onPerformanceHudConfigChanged(
+                    performanceHudConfig.copy(showComputeDelay = !performanceHudConfig.showComputeDelay),
+                )
+            },
+            accentColor = accentColor,
+        )
+        QuickMenuToggleRow(
+            title = stringResource(R.string.performance_hud_display_refresh_rate),
+            enabled = performanceHudConfig.showDisplayRefreshRate,
+            onToggle = {
+                onPerformanceHudConfigChanged(
+                    performanceHudConfig.copy(showDisplayRefreshRate = !performanceHudConfig.showDisplayRefreshRate),
                 )
             },
             accentColor = accentColor,
@@ -2063,9 +2094,6 @@ private fun PerformanceQuickMenuTab(
                     accentColor = accentColor,
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
-
-
             }
         }
     } else {
@@ -2084,8 +2112,6 @@ private fun PerformanceQuickMenuTab(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             )
         }
-
-        Spacer(modifier = Modifier.height(12.dp))
     }
 }
 
@@ -2443,21 +2469,22 @@ private fun QuickMenuChoiceChip(
     accentColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     focusRequester: FocusRequester? = null,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val shape = RoundedCornerShape(12.dp)
     val inputBypass = LocalImmersiveInputBypass.current
-    LaunchedEffect(isFocused) {
-        inputBypass.reportActivate(interactionSource, if (isFocused) onClick else null)
+    LaunchedEffect(isFocused, enabled) {
+        inputBypass.reportActivate(interactionSource, if (isFocused && enabled) onClick else null)
     }
 
     Box(
         modifier = modifier
             .height(44.dp)
             .then(
-                if (isFocused) {
+                if (isFocused && enabled) {
                     Modifier.border(
                         width = 2.dp,
                         color = accentColor.copy(alpha = 0.7f),
@@ -2466,7 +2493,11 @@ private fun QuickMenuChoiceChip(
                 } else {
                     Modifier.border(
                         width = 1.dp,
-                        color = if (selected) accentColor.copy(alpha = 0.55f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+                        color = when {
+                            !enabled -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.10f)
+                            selected -> accentColor.copy(alpha = 0.55f)
+                            else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
+                        },
                         shape = shape,
                     )
                 }
@@ -2474,6 +2505,7 @@ private fun QuickMenuChoiceChip(
             .clip(shape)
             .background(
                 when {
+                    !enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.08f)
                     selected -> accentColor.copy(alpha = 0.18f)
                     isFocused -> accentColor.copy(alpha = 0.12f)
                     else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f)
@@ -2490,11 +2522,12 @@ private fun QuickMenuChoiceChip(
                 selected = selected,
                 interactionSource = interactionSource,
                 indication = null,
+                enabled = enabled,
                 onClick = onClick,
             )
             .then(
                 // Flat mode keeps master's second focus target; immersive drops it.
-                if (inputBypass.active) Modifier else Modifier.focusable(interactionSource = interactionSource),
+                if (inputBypass.active || !enabled) Modifier else Modifier.focusable(interactionSource = interactionSource),
             )
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
@@ -2502,8 +2535,12 @@ private fun QuickMenuChoiceChip(
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge,
-            color = if (selected || isFocused) accentColor else MaterialTheme.colorScheme.onSurface,
-            fontWeight = if (selected || isFocused) FontWeight.SemiBold else FontWeight.Medium,
+            color = when {
+                !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                selected || isFocused -> accentColor
+                else -> MaterialTheme.colorScheme.onSurface
+            },
+            fontWeight = if (selected || (isFocused && enabled)) FontWeight.SemiBold else FontWeight.Medium,
         )
     }
 }

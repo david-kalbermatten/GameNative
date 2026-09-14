@@ -395,6 +395,9 @@
     <string name="performance_hud_metrics_description">Choose which stats appear in the overlay.</string>
     <string name="performance_hud_frame_rate">Frame rate</string>
     <string name="performance_hud_frame_rate_graph">FPS graph</string>
+    <string name="performance_hud_compute_delay">Delay</string>
+    <string name="performance_hud_compute_delay_desc">Displays input-to-display frame latency in milliseconds</string>
+    <string name="performance_hud_display_refresh_rate">Refresh Rate</string>
     <string name="performance_hud_cpu_usage">CPU usage</string>
     <string name="performance_hud_cpu_usage_graph">CPU graph</string>
     <string name="performance_hud_gpu_usage">GPU usage</string>

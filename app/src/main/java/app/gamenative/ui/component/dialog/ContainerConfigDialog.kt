@@ -82,7 +82,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.tooling.preview.Preview
 import app.gamenative.BuildConfig
+import app.gamenative.PrefManager
 import app.gamenative.R
+import com.winlator.renderer.lsfg.LosslessScaling
 import app.gamenative.ui.util.SnackbarManager
 import app.gamenative.ui.component.dialog.state.MessageDialogState
 import app.gamenative.ui.component.settings.SettingsCPUList
@@ -163,7 +165,9 @@ private data class ContainerConfigDialogStaticData(
     val audioDrivers: List<String>,
     val gpuCards: Map<Int, ContainerUtils.GpuInfo>,
     val presentModes: List<String>,
+    val presentModeValues: List<String>,
     val rendererPresentModes: List<String>,
+    val rendererPresentModeValues: List<String>,
     val resourceTypes: List<String>,
     val bcnEmulationEntries: List<String>,
     val bcnEmulationTypeEntries: List<String>,
@@ -223,7 +227,31 @@ private fun rememberContainerConfigDialogStaticData(): ContainerConfigDialogStat
         audioDrivers = stringArrayResource(R.array.audio_driver_entries).toList(),
         gpuCards = ContainerUtils.getGPUCards(context),
         presentModes = stringArrayResource(R.array.present_mode_entries).toList(),
-        rendererPresentModes = listOf("fifo", "mailbox"),
+        presentModeValues = stringArrayResource(R.array.present_mode_values).toList(),
+        rendererPresentModes = run {
+            val supported = PrefManager.supportedRendererPresentModes
+            val all = listOf(
+                "mailbox" to "Mailbox",
+                "fifo" to "FIFO",
+                "immediate" to "Immediate",
+                "relaxed" to "Relaxed",
+            )
+            all.filter { it.first in supported }.ifEmpty {
+                listOf("mailbox" to "Mailbox", "fifo" to "FIFO")
+            }.map { it.second }
+        },
+        rendererPresentModeValues = run {
+            val supported = PrefManager.supportedRendererPresentModes
+            val all = listOf(
+                "mailbox" to "Mailbox",
+                "fifo" to "FIFO",
+                "immediate" to "Immediate",
+                "relaxed" to "Relaxed",
+            )
+            all.filter { it.first in supported }.ifEmpty {
+                listOf("mailbox" to "Mailbox", "fifo" to "FIFO")
+            }.map { it.first }
+        },
         resourceTypes = stringArrayResource(R.array.resource_type_entries).toList(),
         bcnEmulationEntries = stringArrayResource(R.array.bcn_emulation_entries).toList(),
         bcnEmulationTypeEntries = stringArrayResource(R.array.bcn_emulation_type_entries).toList(),
@@ -312,7 +340,9 @@ fun ContainerConfigDialog(
         val audioDrivers = staticData.audioDrivers
         val gpuCards = staticData.gpuCards
         val presentModes = staticData.presentModes
+        val presentModeValues = staticData.presentModeValues
         val rendererPresentModes = staticData.rendererPresentModes
+        val rendererPresentModeValues = staticData.rendererPresentModeValues
         val resourceTypes = staticData.resourceTypes
         val bcnEmulationEntries = staticData.bcnEmulationEntries
         val bcnEmulationTypeEntries = staticData.bcnEmulationTypeEntries
@@ -701,17 +731,22 @@ fun ContainerConfigDialog(
             mutableStateOf(cfg.get("adrenotoolsTurnip", "1") != "0")
         }
         var adrenotoolsTurnipChecked by adrenotoolsTurnipCheckedRef
-        LaunchedEffect(config.graphicsDriverConfig, config.rendererPresentMode) {
+        LaunchedEffect(config.graphicsDriverConfig, config.rendererPresentMode, config.lsfgEnabled) {
             val cfg = KeyValueSet(config.graphicsDriverConfig)
             val presentMode = cfg.get("presentMode", "mailbox")
-            val defaultPresentIdx = presentModes.indexOfFirst { it.equals("mailbox", true) }.takeIf { it >= 0 } ?: 0
+            val defaultPresentIdx = presentModeValues.indexOfFirst { it.equals("mailbox", true) }.takeIf { it >= 0 } ?: 0
             presentModeIndex =
-                presentModes.indexOfFirst { it.equals(presentMode, true) }.let { if (it >= 0) it else defaultPresentIdx }
+                presentModeValues.indexOfFirst { it.equals(presentMode, true) }.let { if (it >= 0) it else defaultPresentIdx }
 
-            val storedRendererPm = config.rendererPresentMode.ifEmpty { "fifo" }
-            val defaultRendererPresentIdx = rendererPresentModes.indexOfFirst { it.equals("fifo", true) }.takeIf { it >= 0 } ?: 0
+            val isFrameGenActive = config.lsfgEnabled && LosslessScaling.getDllFile(context).isFile
+            val storedRendererPm = if (isFrameGenActive) {
+                if ("mailbox" in rendererPresentModeValues) "mailbox" else rendererPresentModeValues.firstOrNull() ?: "fifo"
+            } else {
+                config.rendererPresentMode.ifEmpty { "mailbox" }
+            }
+            val defaultRendererPresentIdx = rendererPresentModeValues.indexOfFirst { it.equals("mailbox", true) }.takeIf { it >= 0 } ?: 0
             rendererPresentModeIndex =
-                rendererPresentModes.indexOfFirst { it.equals(storedRendererPm, true) }.let { if (it >= 0) it else defaultRendererPresentIdx }
+                rendererPresentModeValues.indexOfFirst { it.equals(storedRendererPm, true) }.let { if (it >= 0) it else defaultRendererPresentIdx }
 
             val resourceType = cfg.get("resourceType", "auto")
             val defaultResourceIdx = resourceTypes.indexOfFirst { it.equals("auto", true) }.takeIf { it >= 0 } ?: 0
@@ -1120,7 +1155,9 @@ fun ContainerConfigDialog(
             vkd3dVersionsBase = vkd3dVersionsBase,
             audioDrivers = audioDrivers,
             presentModes = presentModes,
+            presentModeValues = presentModeValues,
             rendererPresentModes = rendererPresentModes,
+            rendererPresentModeValues = rendererPresentModeValues,
             resourceTypes = resourceTypes,
             bcnEmulationEntries = bcnEmulationEntries,
             bcnEmulationTypeEntries = bcnEmulationTypeEntries,

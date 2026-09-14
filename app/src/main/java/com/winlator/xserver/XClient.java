@@ -56,8 +56,7 @@ public class XClient implements XResourceManager.OnResourceLifecycleListener {
         try (XStreamLock ignored = outputStream.lock()) {
             event.send(sequenceNumber, outputStream);
         }
-        catch (IOException e) {
-            e.printStackTrace();
+        catch (IOException ignored) {
         }
     }
 
