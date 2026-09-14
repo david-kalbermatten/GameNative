@@ -22,6 +22,10 @@ class ExternalDisplaySwapController(
     private var swapEnabled: Boolean = false
     private var gameOnExternal: Boolean = false
 
+    val presentationWindow: android.view.Window? get() = presentation?.window
+    val presentationDisplay: Display? get() = presentation?.display
+    val isGameOnExternal: Boolean get() = gameOnExternal
+
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = updatePresentation()
 
@@ -75,6 +79,19 @@ class ExternalDisplaySwapController(
     }
 
     private fun dismissPresentation() {
+        presentation?.let { p ->
+            p.window?.let { w ->
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    try {
+                        val lp = w.attributes
+                        if (lp.preferredDisplayModeId != 0) {
+                            lp.preferredDisplayModeId = 0
+                            w.attributes = lp
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
         presentation?.dismiss()
         presentation = null
         setGameOnExternal(false)

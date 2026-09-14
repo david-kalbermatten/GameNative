@@ -175,6 +175,7 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
     private native void nativeSetFilterMode(long handle, int mode);
     private native void nativeSetSwapRB(long handle, boolean enabled);
     private native void nativeSetPresentMode(long handle, int mode);
+    private native int[] nativeGetSupportedPresentModes(long handle);
     private native void nativeSetEffect(long handle, int effectId, float sharpness,
         int effectMask, float brightness, float contrast, float gamma);
     private native long nativeEnableXrTarget(long handle);
@@ -191,7 +192,10 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
     private native long nativeGetPresentedFrameCount(long handle);
     private native long nativeGetRealFrameCount(long handle);
     private native long nativeGetSourceFrameCount(long handle);
+    private native float nativeGetComputeDurationMs(long handle);
+    private native void nativeSetComputeTimingEnabled(long handle, boolean enabled);
 
+    private boolean computeTimingEnabled = false;
     private boolean frameGenEnabled = false;
     private int frameGenMultiplier = 2;
     private int frameGenTargetRate = 0;
@@ -262,6 +266,25 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
                 }
                 nativeHandle = nativeInit(surface, xServer.screenInfo.width, xServer.screenInfo.height, driverPath, driverLibraryName, nativeLibDir);
                 if (nativeHandle != 0) {
+                    try {
+                        int[] modes = nativeGetSupportedPresentModes(nativeHandle);
+                        if (modes != null && modes.length > 0) {
+                            java.util.LinkedHashSet<String> modeStrings = new java.util.LinkedHashSet<>();
+                            for (int m : modes) {
+                                switch (m) {
+                                    case 0: modeStrings.add("immediate"); break;
+                                    case 1: modeStrings.add("mailbox"); break;
+                                    case 2: modeStrings.add("fifo"); break;
+                                    case 3: modeStrings.add("relaxed"); break;
+                                }
+                            }
+                            if (!modeStrings.isEmpty()) {
+                                app.gamenative.PrefManager.INSTANCE.setSupportedRendererPresentModes(modeStrings);
+                            }
+                        }
+                    } catch (Throwable t) {
+                        android.util.Log.w("VulkanRenderer", "Failed to query supported present modes", t);
+                    }
                     nativeSetPresentMode(nativeHandle, pendingPresentMode);
                     nativeSetFilterMode(nativeHandle, pendingFilterMode);
                     nativeSetSwapRB(nativeHandle, pendingSwapRB);
@@ -314,6 +337,11 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
                     nativeSetVerboseLog(nativeHandle, true);
                     nativeDumpRendererInfo(nativeHandle);
                     enableXrTargetLocked();
+                    if (computeTimingEnabled) {
+                        try {
+                            nativeSetComputeTimingEnabled(nativeHandle, true);
+                        } catch (UnsatisfiedLinkError ignored) {}
+                    }
                 }
             }
             initComplete = true;
@@ -957,8 +985,17 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
         }
     }
 
+    public String getFrameGenShadersCachePath() {
+        synchronized (lock) {
+            return frameGenShadersCachePath;
+        }
+    }
+
     public void setFrameGenerationShaders(String cachePath) {
         synchronized (lock) {
+            if (java.util.Objects.equals(this.frameGenShadersCachePath, cachePath)) {
+                return;
+            }
             this.frameGenShadersCachePath = cachePath;
             if (nativeHandle != 0) {
                 nativeSetFrameGenerationShaders(nativeHandle, cachePath);
@@ -1035,6 +1072,36 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
                 }
             }
             return 0;
+        }
+    }
+
+    public float getComputeDurationMs() {
+        synchronized (lock) {
+            if (!computeTimingEnabled || nativeHandle == 0) {
+                return 0f;
+            }
+            try {
+                return nativeGetComputeDurationMs(nativeHandle);
+            } catch (UnsatisfiedLinkError ignored) {
+                return 0f;
+            }
+        }
+    }
+
+    public void setComputeTimingEnabled(boolean enabled) {
+        synchronized (lock) {
+            computeTimingEnabled = enabled;
+            if (nativeHandle != 0) {
+                try {
+                    nativeSetComputeTimingEnabled(nativeHandle, enabled);
+                } catch (UnsatisfiedLinkError ignored) {}
+            }
+        }
+    }
+
+    public boolean isComputeTimingEnabled() {
+        synchronized (lock) {
+            return computeTimingEnabled;
         }
     }
 

@@ -33,7 +33,7 @@ class RollingFpsCounter(private val windowNs: Long = 1_000_000_000L) {
         }
         val total = renderer.presentedFrameCount
         val generated = renderer.generatedFrameCount
-        val real = renderer.realFrameCount
+        val real = renderer.sourceFrameCount.takeIf { it > 0 } ?: renderer.realFrameCount
         val nowNano = System.nanoTime()
 
         val index: Int
@@ -114,8 +114,8 @@ object LsfgQuickMenuHelper {
 
     /** Persist the target rate and hot-apply it. */
     fun applyTargetRate(container: Container, targetRate: Int) {
+        container.putExtra(LsfgVkManager.EXTRA_TARGET_RATE, targetRate.toString())
         applyExecutor.execute {
-            container.putExtra(LsfgVkManager.EXTRA_TARGET_RATE, targetRate.toString())
             container.saveData()
             val settings = readSettings(container).copy(targetRate = targetRate)
             val effectiveEnabled = settings.multiplier >= 2 || targetRate > 0
@@ -136,28 +136,30 @@ object LsfgQuickMenuHelper {
         flowScale.coerceIn(0.25f, 1.0f)
 
     fun applySettings(container: Container, settings: Settings) {
-        val multiplier = sanitizeMultiplier(settings.multiplier)
-        val flowScale = sanitizeFlowScale(settings.flowScale)
-        val targetRate = settings.targetRate
+        applyExecutor.execute {
+            val multiplier = sanitizeMultiplier(settings.multiplier)
+            val flowScale = sanitizeFlowScale(settings.flowScale)
+            val targetRate = settings.targetRate
 
-        val flowScalePct = (flowScale * 100).roundToInt()
-        val preset = FrameGenPreset.fromFlowScale(flowScalePct)
-        val presetName = if (flowScalePct == preset.flowScale) preset.name else "CUSTOM"
+            val flowScalePct = (flowScale * 100).roundToInt()
+            val preset = FrameGenPreset.fromFlowScale(flowScalePct)
+            val presetName = if (flowScalePct == preset.flowScale) preset.name else "CUSTOM"
 
-        container.putExtra(LsfgVkManager.EXTRA_MULTIPLIER, multiplier.toString())
-        container.putExtra(LsfgVkManager.EXTRA_FLOW_SCALE, String.format(Locale.US, "%.2f", flowScale))
-        container.putExtra(LsfgVkManager.EXTRA_TARGET_RATE, targetRate.toString())
-        container.putExtra(LsfgVkManager.EXTRA_PRESET, presetName)
-        container.saveData()
+            container.putExtra(LsfgVkManager.EXTRA_MULTIPLIER, multiplier.toString())
+            container.putExtra(LsfgVkManager.EXTRA_FLOW_SCALE, String.format(Locale.US, "%.2f", flowScale))
+            container.putExtra(LsfgVkManager.EXTRA_TARGET_RATE, targetRate.toString())
+            container.putExtra(LsfgVkManager.EXTRA_PRESET, presetName)
+            container.saveData()
 
-        val effectiveEnabled = multiplier >= 2 || targetRate > 0
-        val effectiveMultiplier = if (multiplier >= 2) multiplier else 2
-        LsfgVkManager.updateConfigAtRuntime(
-            container,
-            effectiveEnabled,
-            effectiveMultiplier,
-            flowScale,
-            targetRate = targetRate,
-        )
+            val effectiveEnabled = multiplier >= 2 || targetRate > 0
+            val effectiveMultiplier = if (multiplier >= 2) multiplier else 2
+            LsfgVkManager.updateConfigAtRuntime(
+                container,
+                effectiveEnabled,
+                effectiveMultiplier,
+                flowScale,
+                targetRate = targetRate,
+            )
+        }
     }
 }

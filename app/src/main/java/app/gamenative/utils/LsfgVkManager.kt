@@ -129,8 +129,8 @@ object LsfgVkManager {
      * Vulkan implementations and Android surfaces without swapchain creation failures.
      */
     fun presentMode(container: Container): String =
-        container.getExtra(EXTRA_PRESENT_MODE, "fifo")
-            .takeIf { it == "fifo" || it == "mailbox" } ?: "fifo"
+        container.getExtra(EXTRA_PRESENT_MODE, "").takeIf { it.isNotEmpty() }
+            ?: container.rendererPresentMode.ifEmpty { "mailbox" }
 
     /**
      * Base fps cap for the layer's limiter (0 = uncapped). The layer
@@ -334,7 +334,7 @@ object LsfgVkManager {
         val vulkanRenderer = app.gamenative.PluviaApp.xServerView?.renderer as? com.winlator.renderer.VulkanRenderer
         if (vulkanRenderer != null) {
             val ctx = app.gamenative.PluviaApp.xServerView?.context
-            if (ctx != null) {
+            if (ctx != null && vulkanRenderer.frameGenShadersCachePath == null) {
                 val cache = com.winlator.renderer.lsfg.LosslessScaling.resolveOrBuildCache(ctx, container, true)
                 if (cache != null && cache.isFile) {
                     vulkanRenderer.setFrameGenerationShaders(cache.absolutePath)
@@ -346,18 +346,22 @@ object LsfgVkManager {
                 targetRate,
                 flowScalePct
             )
-            val refreshRate = if (ctx != null) {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                    ctx.display?.refreshRate ?: 60f
-                } else {
-                    val wm = ctx.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager
-                    @Suppress("DEPRECATION")
-                    wm?.defaultDisplay?.refreshRate ?: 60f
-                }
-            } else 60f
+            val cadenceHz = app.gamenative.display.DisplayCadenceManager.currentRefreshRateHz
+            val refreshRate = if (cadenceHz > 10f) cadenceHz else {
+                if (ctx != null) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                        ctx.display?.refreshRate ?: 60f
+                    } else {
+                        val wm = ctx.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager
+                        @Suppress("DEPRECATION")
+                        wm?.defaultDisplay?.refreshRate ?: 60f
+                    }
+                } else 60f
+            }
             val stored = container.getExtra(EXTRA_PRESENT_MODE, "")
-            val pm = if (stored.isNotEmpty()) presentMode(container)
-                     else container.rendererPresentMode.ifEmpty { "fifo" }
+            val userPm = if (stored.isNotEmpty()) presentMode(container)
+                         else container.rendererPresentMode.ifEmpty { "mailbox" }
+            val pm = userPm.ifEmpty { "mailbox" }
             val vkMode = when (pm.lowercase(java.util.Locale.ROOT)) {
                 "mailbox" -> 1
                 "immediate" -> 0

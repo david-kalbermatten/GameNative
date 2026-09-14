@@ -119,11 +119,14 @@
         <item>16384 MB</item>
     </string-array>
     <string-array name="present_mode_entries">
-        <item>Never</item>
+        <item>Mailbox</item>
+        <item>FIFO</item>
+        <item>Immediate</item>
+        <item>Relaxed</item>
+    </string-array>
+    <string-array name="present_mode_values">
         <item>mailbox</item>
-        <item>Normal</item>
         <item>fifo</item>
-        <item>Always</item>
         <item>immediate</item>
         <item>relaxed</item>
     </string-array>

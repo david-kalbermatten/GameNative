@@ -4,6 +4,7 @@ import androidx.compose.runtime.saveable.mapSaver
 import app.gamenative.PluviaApp
 import com.winlator.box86_64.Box86_64Preset
 import com.winlator.core.DefaultVersion
+import com.winlator.core.KeyValueSet
 import com.winlator.core.WineInfo
 import com.winlator.core.WineThemeManager
 import com.winlator.fexcore.FEXCorePreset
@@ -17,7 +18,7 @@ data class ContainerData(
     val graphicsDriver: String = Container.DEFAULT_GRAPHICS_DRIVER,
     val graphicsDriverVersion: String = "",
     val graphicsDriverConfig: String = "",
-    val rendererPresentMode: String = "fifo",
+    val rendererPresentMode: String = "mailbox",
     val displayRenderer: String = Container.DEFAULT_DISPLAY_RENDERER,
     val xrRefreshRate: Int = 72,
     val xrRenderScale: Int = 100,
@@ -208,7 +209,9 @@ data class ContainerData(
                     graphicsDriver = savedMap["graphicsDriver"] as String,
                     graphicsDriverVersion = savedMap["graphicsDriverVersion"] as String,
                     graphicsDriverConfig = (savedMap["graphicsDriverConfig"] as? String) ?: "",
-                    rendererPresentMode = (savedMap["rendererPresentMode"] as? String) ?: "fifo",
+                    rendererPresentMode = (savedMap["rendererPresentMode"] as? String)
+                        ?: (savedMap["displaySync"] as? String)
+                        ?: "mailbox",
                     displayRenderer = (savedMap["displayRenderer"] as? String) ?: "vulkan",
                     xrRefreshRate = (savedMap["xrRefreshRate"] as? Int) ?: 72,
                     xrRenderScale = (savedMap["xrRenderScale"] as? Int) ?: 100,

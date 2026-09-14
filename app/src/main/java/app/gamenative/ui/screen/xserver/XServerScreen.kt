@@ -17,8 +17,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.View.OnLayoutChangeListener
 import android.view.ViewConfiguration
+import android.view.SurfaceView
 import android.view.ViewGroup
 import android.view.WindowInsets
+import app.gamenative.display.DisplayCadenceManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -629,12 +631,15 @@ fun XServerScreen(
     val initialLsfgSettings = remember(container.id) { LsfgQuickMenuHelper.readSettings(container) }
     var lsfgMultiplier by rememberSaveable(container.id) { mutableIntStateOf(initialLsfgSettings.multiplier) }
     var lsfgFlowScale by rememberSaveable(container.id) { mutableStateOf(initialLsfgSettings.flowScale) }
+    var lsfgTargetRate by rememberSaveable(container.id) { mutableIntStateOf(initialLsfgSettings.targetRate) }
     val lsfgFpsCounter = remember { app.gamenative.utils.RollingFpsCounter() }
 
     fun persistFpsLimiterState() {
         container.putExtra(FPS_LIMITER_ENABLED_EXTRA, fpsLimiterEnabled)
         container.putExtra(FPS_LIMITER_TARGET_EXTRA, fpsLimiterTarget)
-        container.saveData()
+        CoroutineScope(Dispatchers.IO).launch {
+            container.saveData()
+        }
     }
 
     fun loadPerformanceHudConfig(): PerformanceHudConfig {
@@ -653,6 +658,8 @@ fun XServerScreen(
             showFrameRateGraph = PrefManager.performanceHudShowFrameRateGraph,
             showCpuUsageGraph = PrefManager.performanceHudShowCpuUsageGraph,
             showGpuUsageGraph = PrefManager.performanceHudShowGpuUsageGraph,
+            showComputeDelay = PrefManager.performanceHudShowComputeDelay,
+            showDisplayRefreshRate = PrefManager.performanceHudShowDisplayRefreshRate,
             backgroundOpacity = PrefManager.performanceHudBackgroundOpacity,
             colorIntensity = PrefManager.performanceHudColorIntensity,
             showTextOutline = PrefManager.performanceHudShowTextOutline,
@@ -686,6 +693,8 @@ fun XServerScreen(
         PrefManager.performanceHudShowFrameRateGraph = config.showFrameRateGraph
         PrefManager.performanceHudShowCpuUsageGraph = config.showCpuUsageGraph
         PrefManager.performanceHudShowGpuUsageGraph = config.showGpuUsageGraph
+        PrefManager.performanceHudShowComputeDelay = config.showComputeDelay
+        PrefManager.performanceHudShowDisplayRefreshRate = config.showDisplayRefreshRate
         PrefManager.performanceHudBackgroundOpacity = config.backgroundOpacity
         PrefManager.performanceHudColorIntensity = config.colorIntensity
         PrefManager.performanceHudShowTextOutline = config.showTextOutline
@@ -696,40 +705,53 @@ fun XServerScreen(
         performanceHudConfig = config
         persistPerformanceHudConfig(config)
         performanceHudView?.setConfig(config)
+        val vr = xServerView?.renderer as? VulkanRenderer
+        vr?.setComputeTimingEnabled(performanceHudView != null && config.showComputeDelay)
     }
 
     LaunchedEffect(xServerView?.renderer) {
         val screenEffectsConfig = loadScreenEffectsConfig(container)
         when (val renderer = xServerView?.renderer) {
-            is VulkanRenderer -> applyScreenEffectsConfig(renderer, screenEffectsConfig)
+            is VulkanRenderer -> {
+                applyScreenEffectsConfig(renderer, screenEffectsConfig)
+                renderer.setComputeTimingEnabled(performanceHudView != null && performanceHudConfig.showComputeDelay)
+            }
             is GLRenderer -> applyScreenEffectsConfig(renderer, screenEffectsConfig)
         }
     }
 
     fun isLsfgActive(): Boolean =
-        isLsfgAvailable && (lsfgMultiplier >= 2 || LsfgQuickMenuHelper.targetRate(container) > 0)
+        isLsfgAvailable && (lsfgMultiplier >= 2 || lsfgTargetRate > 0)
 
-    fun effectiveLsfgMultiplier(): Int {
-        val target = LsfgQuickMenuHelper.targetRate(container)
-        return when {
+    fun effectiveLsfgMultiplier(): Int =
+        when {
             lsfgMultiplier >= 2 -> lsfgMultiplier
-            target > 0 -> 2
+            lsfgTargetRate > 0 -> 2
             else -> 1
         }
-    }
 
     fun applyFpsLimiterToEngines(limit: Int) {
         val lsfgActive = isLsfgActive()
         val mult = effectiveLsfgMultiplier()
-        // SurfaceControl frame-rate hint: when LSFG is active, the display output
-        // presents at base * multiplier. Setting the hint to the multiplied rate
-        // (or 0 for panel default) avoids clamping the panel to the base rate.
-        val displayRate = if (lsfgActive && limit > 0) {
-            (limit * mult).coerceAtMost(detectedMaxRefreshRateHz)
-        } else {
-            if (lsfgActive) 0 else limit
+        val targetRate = lsfgTargetRate
+        // Effective display target FPS:
+        // - When FG is off: limit (or 0 for system default if limiter is disabled)
+        // - When FG adaptive target is active: targetRate (exception: if fps is unlimited or limit exceeds target, use targetRate)
+        // - When FG multiplier is active: limit * multiplier (if limit > 0)
+        val displayRate = when {
+            !lsfgActive -> if (limit > 0) limit else 0
+            targetRate > 0 -> targetRate
+            limit > 0 -> limit * mult
+            else -> 0
         }
-        xServerView?.setFrameRateLimit(displayRate)
+        val targetActivity = activity ?: BrightnessManager.findActivity(context)
+        val surfaceHolder = (xServerView as? SurfaceView)?.holder
+        DisplayCadenceManager.applyCadence(
+            activity = targetActivity,
+            surfaceHolder = surfaceHolder,
+            targetFps = displayRate,
+        )
+        xServerView?.setFrameRateLimit(if (displayRate > 0) displayRate.coerceAtMost(detectedMaxRefreshRateHz) else 0)
         // Throttle the X Present extension so the game's own render loop receives
         // back-pressure and actually limits its rendering rate (matches WinNative).
         xServerView?.getxServer()
@@ -753,7 +775,7 @@ fun XServerScreen(
             LsfgQuickMenuHelper.Settings(
                 multiplier = lsfgMultiplier,
                 flowScale = lsfgFlowScale,
-                targetRate = LsfgQuickMenuHelper.targetRate(container),
+                targetRate = lsfgTargetRate,
             ),
         )
     }
@@ -762,9 +784,6 @@ fun XServerScreen(
         fpsLimiterEnabled = enabled
         applyFpsLimiterToEngines(effectiveFpsLimit())
         persistFpsLimiterState()
-        if (isLsfgActive()) {
-            applyLsfgSettings()
-        }
     }
 
     fun applyFpsLimiterTarget(target: Int) {
@@ -774,15 +793,15 @@ fun XServerScreen(
             applyFpsLimiterToEngines(effectiveFpsLimit())
         }
         persistFpsLimiterState()
-        if (isLsfgActive()) {
-            applyLsfgSettings()
-        }
     }
 
     fun applyLsfgMultiplier(mult: Int) {
         lsfgMultiplier = LsfgQuickMenuHelper.sanitizeMultiplier(mult)
+        lsfgTargetRate = 0
         container.putExtra(LsfgVkManager.EXTRA_TARGET_RATE, "0")
-        container.saveData()
+        CoroutineScope(Dispatchers.IO).launch {
+            container.saveData()
+        }
         applyLsfgSettings()
         applyFpsLimiterToEngines(effectiveFpsLimit())
     }
@@ -793,6 +812,8 @@ fun XServerScreen(
     }
 
     fun applyLsfgTargetRate(target: Int) {
+        lsfgTargetRate = target
+        container.putExtra(LsfgVkManager.EXTRA_TARGET_RATE, target.toString())
         applyFpsLimiterToEngines(effectiveFpsLimit())
     }
 
@@ -860,6 +881,8 @@ fun XServerScreen(
             (hud.parent as? ViewGroup)?.removeView(hud)
         }
         performanceHudView = null
+        val vr = xServerView?.renderer as? com.winlator.renderer.VulkanRenderer
+        vr?.setComputeTimingEnabled(false)
     }
 
     fun togglePerformanceHudLayout() {
@@ -888,10 +911,17 @@ fun XServerScreen(
             context = context,
             fpsProvider = {
                 val vr = xServerView?.renderer as? com.winlator.renderer.VulkanRenderer
-                if (vr != null && vr.isFrameGenerationEnabled && lsfgFpsCounter.isGenerating) {
-                    lsfgFpsCounter.sourceFps
+                lsfgFpsCounter.sample(vr)
+                if (vr != null && vr.isFrameGenerationEnabled) {
+                    if (lsfgFpsCounter.sourceFps > 0f) {
+                        lsfgFpsCounter.sourceFps
+                    } else {
+                        frameRating?.currentFPS?.takeIf { it > 0f }
+                            ?: lsfgFpsCounter.outputFps.takeIf { it > 0f }
+                            ?: 0f
+                    }
                 } else {
-                    frameRating?.currentFPS ?: lsfgFpsCounter.outputFps
+                    frameRating?.currentFPS?.takeIf { it > 0f } ?: lsfgFpsCounter.outputFps
                 }
             },
             outputFpsProvider = {
@@ -900,6 +930,27 @@ fun XServerScreen(
                 if (vr != null && vr.isFrameGenerationEnabled && lsfgFpsCounter.isGenerating) {
                     out
                 } else 0f
+            },
+            computeDelayProvider = {
+                val vr = xServerView?.renderer as? com.winlator.renderer.VulkanRenderer
+                vr?.computeDurationMs ?: 0f
+            },
+            onComputeDelayDemandChanged = { demand ->
+                val vr = xServerView?.renderer as? com.winlator.renderer.VulkanRenderer
+                vr?.setComputeTimingEnabled(demand)
+            },
+            displayRefreshRateProvider = {
+                val cadenceHz = DisplayCadenceManager.currentRefreshRateHz
+                if (cadenceHz > 10f) cadenceHz else {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                        context.display?.refreshRate ?: 60f
+                    } else 60f
+                }
+            },
+            presentModeProvider = {
+                container.getExtra(LsfgVkManager.EXTRA_PRESENT_MODE, "").ifEmpty {
+                    container.rendererPresentMode.ifEmpty { "mailbox" }
+                }
             },
             initialConfig = performanceHudConfig,
             initialCompactMode = PrefManager.performanceHudCompactMode,
@@ -2027,8 +2078,8 @@ fun XServerScreen(
                 setFrameRateLimit(if (fpsLimiterEnabled) fpsLimiterTarget else 0)
                 val renderer = this.renderer
                 if (!useGLRenderer && renderer is VulkanRenderer) {
-                    val pm = container.rendererPresentMode.ifEmpty { "fifo" }
-                    val vkMode = when (pm.lowercase(Locale.getDefault())) {
+                    val pm = container.rendererPresentMode.ifEmpty { "mailbox" }
+                    val vkMode = when (pm.lowercase(Locale.ROOT)) {
                         "mailbox" -> 1
                         "immediate" -> 0
                         "relaxed" -> 3
@@ -2133,7 +2184,8 @@ fun XServerScreen(
                     val multiplier = LsfgVkManager.multiplier(container)
                     val flowScale = LsfgVkManager.flowScale(container)
                     val targetRate = LsfgVkManager.targetRate(container)
-                    val refreshRate = context.display?.refreshRate ?: 60f
+                    val cadenceHz = DisplayCadenceManager.currentRefreshRateHz
+                    val refreshRate = if (cadenceHz > 10f) cadenceHz else (context.display?.refreshRate ?: 60f)
                     renderer.setFrameGenerationRefreshRate(refreshRate)
                     renderer.setFrameGenerationMode(
                         if (multiplier >= 2) multiplier else 2,
@@ -2688,8 +2740,10 @@ fun XServerScreen(
                                 overlay.visibility = View.GONE
                                 overlay.setMode(ExternalDisplayInputController.Mode.OFF)
                             }
+                            DisplayCadenceManager.reapplyCurrentCadence(context as? Activity, (xServerView as? SurfaceView)?.holder)
                         },
                     ).apply {
+                        DisplayCadenceManager.registerExternalDisplayController(this)
                         setSwapEnabled(true)
                         start()
                     }
@@ -2702,6 +2756,8 @@ fun XServerScreen(
                 override fun onViewDetachedFromWindow(v: View) {
                     externalDisplayController?.stop()
                     swapController?.stop()
+                    DisplayCadenceManager.unregisterExternalDisplayController()
+                    DisplayCadenceManager.restoreCadence(context as? Activity, (xServerView as? SurfaceView)?.holder)
                 }
             })
             // Don't call hideInputControls() here - let the auto-show logic below handle visibility
@@ -6027,7 +6083,7 @@ private suspend fun extractGraphicsDriverFiles(
         if (maxDeviceMemory != null && maxDeviceMemory.toInt() > 0)
             envVars.put("WRAPPER_VMEM_MAX_SIZE", maxDeviceMemory)
 
-        val presentMode = graphicsDriverConfig.get("presentMode")
+        val presentMode = graphicsDriverConfig.get("presentMode").ifEmpty { "mailbox" }.lowercase(Locale.ROOT)
         if (presentMode.contains("immediate")) {
             envVars.put("WRAPPER_MAX_IMAGE_COUNT", "1")
         }

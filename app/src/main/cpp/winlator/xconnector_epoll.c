@@ -175,6 +175,14 @@ Java_com_winlator_xconnector_XConnectorEpoll_doEpollIndefinitely(JNIEnv *env, jo
             printf("xconnector_epoll.c accept %d", clientFd);
             if (clientFd >= 0) {
                 trackFd(clientFd);
+
+                // Configure socket buffer sizes and send timeout to prevent UI freezes
+                int bufSize = 512 * 1024;
+                setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &bufSize, sizeof(bufSize));
+                setsockopt(clientFd, SOL_SOCKET, SO_RCVBUF, &bufSize, sizeof(bufSize));
+                struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 }; // 100ms send timeout
+                setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
                 if (addClientToEpoll) {
                     struct epoll_event ev = {.data.fd = clientFd, .events = EPOLLIN};
                     if (epoll_ctl(epollFd, EPOLL_CTL_ADD, clientFd, &ev) >= 0) {
@@ -223,9 +231,68 @@ Java_com_winlator_xconnector_ClientSocket_read(JNIEnv *env, jobject obj, jint fd
 JNIEXPORT jint JNICALL
 Java_com_winlator_xconnector_ClientSocket_write(JNIEnv *env, jobject obj, jint fd, jobject data,
                                                 jint length) {
-//    printf("Writing to %d", fd);
     char *dataAddr = (*env)->GetDirectBufferAddress(env, data);
-    return write(fd, dataAddr, length);
+    if (!dataAddr || length <= 0) return 0;
+
+    // Check if called on the Android Main (UI) thread.
+    // In Linux/Android, the main thread's TID is identical to the process PID (thread group leader).
+    bool isMainThread = (gettid() == getpid());
+
+    if (isMainThread) {
+        // UI thread: NEVER block. If the peer is frozen/loading, blocking here causes Android ANRs.
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        int pr = poll(&pfd, 1, 0); // Non-blocking check
+        if (pr <= 0 || !(pfd.revents & POLLOUT)) {
+            return -1;
+        }
+
+        ssize_t sent;
+        do {
+            sent = send(fd, dataAddr, length, MSG_DONTWAIT | MSG_NOSIGNAL);
+        } while (sent < 0 && errno == EINTR);
+
+        if (sent < 0 && errno == ENOTSOCK) {
+            do {
+                sent = write(fd, dataAddr, length);
+            } while (sent < 0 && errno == EINTR);
+        }
+
+        if (sent < 0) {
+            return -1;
+        }
+        return (jint)sent;
+    } else {
+        // Background thread (e.g. epoll thread sending replies):
+        // Write in chunks with a bounded poll wait (up to 500ms) to ensure replies
+        // complete without hanging indefinitely if a client freezes.
+        int totalWritten = 0;
+        while (totalWritten < length) {
+            struct pollfd pfd;
+            pfd.fd = fd;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            int pr = poll(&pfd, 1, 500);
+            if (pr <= 0 || !(pfd.revents & POLLOUT)) {
+                return totalWritten > 0 ? totalWritten : -1;
+            }
+
+            ssize_t sent = send(fd, dataAddr + totalWritten, length - totalWritten, MSG_DONTWAIT | MSG_NOSIGNAL);
+            if (sent < 0 && errno == ENOTSOCK) {
+                sent = write(fd, dataAddr + totalWritten, length - totalWritten);
+            }
+
+            if (sent < 0) {
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                return totalWritten > 0 ? totalWritten : -1;
+            }
+            totalWritten += (int)sent;
+        }
+        return totalWritten;
+    }
 }
 
 JNIEXPORT jint JNICALL
@@ -306,8 +373,16 @@ Java_com_winlator_xconnector_ClientSocket_sendAncillaryMsg(JNIEnv *env, jobject 
     cmsg->cmsg_len = msg.msg_controllen;
     ((int*)CMSG_DATA(cmsg))[0] = ancillaryFd;
 
-    jint size = sendmsg(clientFd, &msg, 0);
-    printf("xconnector_epoll.c sendmsg size %d", size);
+    bool isMainThread = (gettid() == getpid());
+    int flags = MSG_NOSIGNAL;
+    if (isMainThread) {
+        flags |= MSG_DONTWAIT;
+        struct pollfd pfd = { .fd = clientFd, .events = POLLOUT, .revents = 0 };
+        int pr = poll(&pfd, 1, 0);
+        if (pr <= 0 || !(pfd.revents & POLLOUT)) return -1;
+    }
+
+    jint size = sendmsg(clientFd, &msg, flags);
     return size;
 }
 

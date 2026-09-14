@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import app.gamenative.data.GameSource
 import app.gamenative.powercontrol.autotuning.DeviceGate
@@ -204,9 +205,16 @@ object PrefManager {
 
     private val RENDERER_PRESENT_MODE = stringPreferencesKey("renderer_present_mode")
     var rendererPresentMode: String
-        get() = getPref(RENDERER_PRESENT_MODE, "fifo")
+        get() = getPref(RENDERER_PRESENT_MODE, "mailbox")
         set(value) {
             setPref(RENDERER_PRESENT_MODE, value)
+        }
+
+    private val SUPPORTED_RENDERER_PRESENT_MODES = stringSetPreferencesKey("supported_renderer_present_modes")
+    var supportedRendererPresentModes: Set<String>
+        get() = getPref(SUPPORTED_RENDERER_PRESENT_MODES, setOf("fifo", "mailbox"))
+        set(value) {
+            setPref(SUPPORTED_RENDERER_PRESENT_MODES, value)
         }
 
     private val DISPLAY_RENDERER_MODE = stringPreferencesKey("display_renderer_mode")
@@ -477,6 +485,20 @@ object PrefManager {
         get() = getPref(PERFORMANCE_HUD_SHOW_GPU_USAGE_GRAPH, false)
         set(value) {
             setPref(PERFORMANCE_HUD_SHOW_GPU_USAGE_GRAPH, value)
+        }
+
+    private val PERFORMANCE_HUD_SHOW_COMPUTE_DELAY = booleanPreferencesKey("performance_hud_show_compute_delay")
+    var performanceHudShowComputeDelay: Boolean
+        get() = getPref(PERFORMANCE_HUD_SHOW_COMPUTE_DELAY, false)
+        set(value) {
+            setPref(PERFORMANCE_HUD_SHOW_COMPUTE_DELAY, value)
+        }
+
+    private val PERFORMANCE_HUD_SHOW_DISPLAY_REFRESH_RATE = booleanPreferencesKey("performance_hud_show_display_refresh_rate")
+    var performanceHudShowDisplayRefreshRate: Boolean
+        get() = getPref(PERFORMANCE_HUD_SHOW_DISPLAY_REFRESH_RATE, false)
+        set(value) {
+            setPref(PERFORMANCE_HUD_SHOW_DISPLAY_REFRESH_RATE, value)
         }
 
     private val PERFORMANCE_HUD_BACKGROUND_OPACITY = floatPreferencesKey("performance_hud_background_opacity")

@@ -111,11 +111,13 @@ public class XConnectorEpoll implements Runnable {
             Log.d(TAG, logPrefix() + " Stopping connector thread (connectedClients=" + this.connectedClients.size() + ")");
             this.running = false;
             requestShutdown();
-            while (this.epollThread.isAlive()) {
-                try {
-                    this.epollThread.join();
-                } catch (InterruptedException e) {
-                }
+            try {
+                this.epollThread.join(2000);
+            } catch (InterruptedException e) {
+            }
+            if (this.epollThread.isAlive()) {
+                Log.w(TAG, logPrefix() + " epollThread did not terminate within 2s, interrupting");
+                this.epollThread.interrupt();
             }
             this.epollThread = null;
         }
@@ -249,11 +251,12 @@ public class XConnectorEpoll implements Runnable {
         if (this.multithreadedClients) {
             if (Thread.currentThread() != client.pollThread) {
                 client.requestShutdown();
-                while (client.pollThread.isAlive()) {
-                    try {
-                        client.pollThread.join();
-                    } catch (InterruptedException e) {
-                    }
+                try {
+                    client.pollThread.join(2000);
+                } catch (InterruptedException e) {
+                }
+                if (client.pollThread.isAlive()) {
+                    client.pollThread.interrupt();
                 }
                 this.connectionHandler.handleConnectionShutdown(client);
                 client.pollThread = null;

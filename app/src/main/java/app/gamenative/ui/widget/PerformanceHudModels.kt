@@ -14,6 +14,8 @@ internal enum class MetricId {
     GPU_TEMP,
     FAN,
     TUNE,
+    COMPUTE_DELAY,
+    DISPLAY_REFRESH_RATE,
 }
 
 internal enum class GraphScaleMode {
@@ -45,6 +47,8 @@ internal data class HudSnapshot(
     val gpuTemp: String?,
     val fan: String?,
     val tune: String?,
+    val computeDelay: String?,
+    val displayRefreshRate: String?,
 )
 
 internal data class HudAppearance(

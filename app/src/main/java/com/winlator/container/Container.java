@@ -107,7 +107,7 @@ public class Container {
     private String dxwrapper = DEFAULT_DXWRAPPER;
     private String dxwrapperConfig = DEFAULT_DXWRAPPERCONFIG;
     private String graphicsDriverConfig = DEFAULT_GRAPHICSDRIVERCONFIG;
-    private String rendererPresentMode = "fifo";
+    private String rendererPresentMode = "mailbox";
     private String displayRenderer = Container.DEFAULT_DISPLAY_RENDERER;
     private int xrRefreshRate = 72;
     private int xrRenderScale = 100;
@@ -297,9 +297,13 @@ public class Container {
         this.graphicsDriverConfig = graphicsDriverConfig != null ? graphicsDriverConfig : "";
     }
 
-    public String getRendererPresentMode() { return rendererPresentMode; }
+    public String getRendererPresentMode() {
+        return rendererPresentMode != null && !rendererPresentMode.isEmpty() ? rendererPresentMode : "mailbox";
+    }
 
-    public void setRendererPresentMode(String v) { this.rendererPresentMode = v != null ? v : "fifo"; }
+    public void setRendererPresentMode(String v) {
+        this.rendererPresentMode = v != null && !v.isEmpty() ? v : "mailbox";
+    }
 
     public String getDisplayRenderer() { return displayRenderer; }
 
@@ -757,7 +761,7 @@ public class Container {
             data.put("graphicsDriver", graphicsDriver);
             data.put("graphicsDriverVersion", graphicsDriverVersion); // Ensure this is added
             if (!graphicsDriverConfig.isEmpty()) data.put("graphicsDriverConfig", graphicsDriverConfig);
-            data.put("rendererPresentMode", rendererPresentMode);
+            data.put("rendererPresentMode", getRendererPresentMode());
             data.put("displayRendererMode", displayRenderer);
             data.put("xrRefreshRate", xrRefreshRate);
             data.put("xrRenderScale", xrRenderScale);
@@ -886,6 +890,11 @@ public class Container {
                     break;
                 case "rendererPresentMode" :
                     setRendererPresentMode(data.getString(key));
+                    break;
+                case "displaySync" :
+                    if (!data.has("rendererPresentMode")) {
+                        setRendererPresentMode(data.getString(key));
+                    }
                     break;
                 case "displayRendererMode" :
                     setDisplayRenderer(data.getString(key));

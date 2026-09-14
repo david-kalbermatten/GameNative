@@ -34,6 +34,8 @@ data class PerformanceHudConfig(
     val showFrameRateGraph: Boolean = false,
     val showCpuUsageGraph: Boolean = false,
     val showGpuUsageGraph: Boolean = false,
+    val showComputeDelay: Boolean = false,
+    val showDisplayRefreshRate: Boolean = false,
     val backgroundOpacity: Float = DEFAULT_BACKGROUND_OPACITY,
     val colorIntensity: Float = DEFAULT_COLOR_INTENSITY,
     val showTextOutline: Boolean = DEFAULT_SHOW_TEXT_OUTLINE,

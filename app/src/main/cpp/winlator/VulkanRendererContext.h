@@ -89,6 +89,11 @@ struct VkTable {
     PFN_vkWaitForFences WaitForFences;
     PFN_vkResetFences ResetFences;
     PFN_vkGetFenceStatus GetFenceStatus;
+    PFN_vkCreateQueryPool CreateQueryPool;
+    PFN_vkDestroyQueryPool DestroyQueryPool;
+    PFN_vkCmdResetQueryPool CmdResetQueryPool;
+    PFN_vkCmdWriteTimestamp CmdWriteTimestamp;
+    PFN_vkGetQueryPoolResults GetQueryPoolResults;
 
     PFN_vkGetAndroidHardwareBufferPropertiesANDROID GetAndroidHardwareBufferPropertiesANDROID;
 };
@@ -158,6 +163,8 @@ public:
     uint64_t getPresentedFrameCount() const;
     uint64_t getRealFrameCount() const;
     uint64_t getSourceFrameCount() const;
+    float getComputeDurationMs() const;
+    void setComputeTimingEnabled(bool enabled);
 
     void onSurfaceResized(int width, int height);
     void setTransform(float ox, float oy, float sx, float sy);
@@ -365,6 +372,17 @@ private:
     std::vector<VkFence>     inFlightFences;
     std::vector<VkFence>     imgInFlight;
     uint32_t                 currentFrame = 0;
+    // Latency & GPU execution timing for HUD Delay (DL) metric
+    VkQueryPool              computeQueryPool = VK_NULL_HANDLE;
+    float                    timestampPeriod = 0.0f;
+    std::atomic<bool>        computeTimingEnabled{false};
+    std::atomic<float>       lastComputeDurationMs{0.0f};
+    bool                     queryWritten[MAX_FRAMES_IN_FLIGHT]{};
+    std::chrono::steady_clock::time_point frameSubmitTime[MAX_FRAMES_IN_FLIGHT]{};
+
+    // Frame pacing timestamps: used to separate real game frame arrivals from standalone cursor redraws
+    std::chrono::steady_clock::time_point lastRealFrameTime{};
+    std::chrono::steady_clock::time_point lastRenderTime{};
 
     VkCompositeTarget composite[VK_MAX_COMPOSITE_TARGETS]{};
     uint32_t          compositeCount = 0;

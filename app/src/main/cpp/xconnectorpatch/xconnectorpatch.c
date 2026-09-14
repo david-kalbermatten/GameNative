@@ -211,6 +211,14 @@ Java_com_winlator_xconnector_XConnectorEpollNative_doEpollIndefinitely(JNIEnv *e
             }
 
             trackFd(clientFd);
+
+            // Configure socket buffer sizes and send timeout to prevent UI freezes
+            int bufSize = 512 * 1024;
+            setsockopt(clientFd, SOL_SOCKET, SO_SNDBUF, &bufSize, sizeof(bufSize));
+            setsockopt(clientFd, SOL_SOCKET, SO_RCVBUF, &bufSize, sizeof(bufSize));
+            struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 }; // 100ms send timeout
+            setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
             if (addClientToEpoll) {
                 struct epoll_event event;
                 event.data.fd = clientFd;
