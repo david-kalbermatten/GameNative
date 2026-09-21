@@ -145,7 +145,7 @@ public:
     int64_t enableXrTarget();
     void disableXrTarget();
     int64_t xrTargetExtentPacked();
-    VulkanRendererContext(ANativeWindow* window, int cWidth, int cHeight, void* adrenotoolsHandle = nullptr, bool framegenArmed = false);
+    VulkanRendererContext(ANativeWindow* window, int cWidth, int cHeight, void* adrenotoolsHandle = nullptr);
     ~VulkanRendererContext();
 
     void setFrameGenerationEnabled(bool enabled);
@@ -371,8 +371,6 @@ private:
     bool              compositeBuilt = false;
     VkRenderPass      compositePass = VK_NULL_HANDLE;
 
-    const bool            framegenArmed = false;
-    bool                  framegenArmWarned = false;
     VkrLsfg*              lsfg = nullptr;
     std::string           lsfgCachePath;
     bool                  framegenRequested = false;

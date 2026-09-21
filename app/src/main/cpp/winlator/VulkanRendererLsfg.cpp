@@ -238,13 +238,6 @@ void VulkanRendererContext::blitCompositeToSwapchain(VkCommandBuffer cmd, const 
 }
 
 void VulkanRendererContext::setFrameGenerationEnabled(bool enabled) {
-    if (!framegenArmed) {
-        if (enabled && !framegenArmWarned) {
-            framegenArmWarned = true;
-            RLOG("Frame generation requested but renderer was not armed at launch; ignoring");
-        }
-        return;
-    }
     if (framegenRequested == enabled) return;
     std::unique_lock<std::shared_mutex> fl(frameMutex);
     std::lock_guard<std::mutex> lk(renderMutex);
@@ -262,11 +255,10 @@ void VulkanRendererContext::setFrameGenerationEnabled(bool enabled) {
 }
 
 bool VulkanRendererContext::isFrameGenerationSupported() const {
-    return framegenArmed && framegenSupported;
+    return framegenSupported;
 }
 
 void VulkanRendererContext::setFrameGenerationShaders(const std::string& cachePath) {
-    if (!framegenArmed) return;
     std::unique_lock<std::shared_mutex> fl(frameMutex);
     std::lock_guard<std::mutex> lk(renderMutex);
     if (device) vk_.DeviceWaitIdle(device);
@@ -289,7 +281,6 @@ void VulkanRendererContext::setFrameGenerationRefreshRate(float hz) {
 }
 
 void VulkanRendererContext::setFrameGenerationMode(int multiplier, int targetRate, int flowScalePct) {
-    if (!framegenArmed) return;
     std::unique_lock<std::shared_mutex> fl(frameMutex);
     std::lock_guard<std::mutex> lk(renderMutex);
     const uint32_t previous_images = framegenExtraImages();

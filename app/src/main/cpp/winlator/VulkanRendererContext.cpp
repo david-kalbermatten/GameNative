@@ -12,9 +12,9 @@
 #include "window_vert.h"
 #include "window_frag.h"
 
-VulkanRendererContext::VulkanRendererContext(ANativeWindow* win, int cW, int cH, void* aHandle, bool fgArmed)
+VulkanRendererContext::VulkanRendererContext(ANativeWindow* win, int cW, int cH, void* aHandle)
     : window(win), surfaceWidth(cW), surfaceHeight(cH), containerWidth(cW), containerHeight(cH),
-      adrenotoolsHandle(aHandle), framegenArmed(fgArmed)
+      adrenotoolsHandle(aHandle)
 {
     createInstance(); createSurface(); pickPhysicalDevice(); createLogicalDevice();
     createSwapchain(); createRenderPass(); createDSLayout();
@@ -75,7 +75,7 @@ VulkanRendererContext::~VulkanRendererContext() {
             inFlightFences[i] = VK_NULL_HANDLE;
         }
     }
-    if (framegenArmed) vkd_unload();
+    vkd_unload();
     vk_.DestroyCommandPool(device, cmdPool, nullptr);
     vk_.DestroyRenderPass(device, renderPass, nullptr);
     vk_.DestroyDevice(device, nullptr);
@@ -253,8 +253,8 @@ void VulkanRendererContext::createLogicalDevice() {
       for (auto& e:av) {
           if (strcmp(e.extensionName,"VK_EXT_filter_cubic")==0
            || strcmp(e.extensionName,"VK_IMG_filter_cubic")==0) cubicSupported=true;
-          if (framegenArmed && strcmp(e.extensionName, VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME)==0) memoryModelExtSupported=true;
-          if (framegenArmed && strcmp(e.extensionName, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)==0) float16ExtSupported=true;
+          if (strcmp(e.extensionName, VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME)==0) memoryModelExtSupported=true;
+          if (strcmp(e.extensionName, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)==0) float16ExtSupported=true;
       } }
     std::vector<const char*> extList = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -290,8 +290,8 @@ void VulkanRendererContext::createLogicalDevice() {
     VkPhysicalDeviceFeatures2 enableFeatures2{};
     enableFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
 
-    PFN_vkGetPhysicalDeviceFeatures2 getFeatures2 = framegenArmed ?
-        (PFN_vkGetPhysicalDeviceFeatures2)gipa(instance, "vkGetPhysicalDeviceFeatures2") : nullptr;
+    PFN_vkGetPhysicalDeviceFeatures2 getFeatures2 =
+        (PFN_vkGetPhysicalDeviceFeatures2)gipa(instance, "vkGetPhysicalDeviceFeatures2");
     if (getFeatures2) {
         getFeatures2(physicalDevice, &supportedFeatures);
         const bool canEnableMemoryModel =
@@ -325,7 +325,7 @@ void VulkanRendererContext::createLogicalDevice() {
     if (vk_.CreateDevice(physicalDevice,&ci,nullptr,&device)!=VK_SUCCESS) throw std::runtime_error("device");
     vk_.GetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)gipa(instance, "vkGetDeviceProcAddr");
     loadDeviceDispatch();
-    if (framegenArmed && !vkd_load(instance, device, gipa)) {
+    if (!vkd_load(instance, device, gipa)) {
         RLOG_E("Failed to load required Vulkan dispatch functions for LSFG");
     }
     vk_.GetDeviceQueue(device,graphicsQueueFamilyIndex,0,&graphicsQueue);
@@ -343,11 +343,9 @@ void VulkanRendererContext::createSwapchain() {
     uint32_t imgCount = caps.minImageCount + 1 + framegenExtraImages();
     if (caps.maxImageCount > 0 && imgCount > caps.maxImageCount) imgCount = caps.maxImageCount;
 
-    if (framegenArmed) {
-        bool transferDstCapable = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
-        swapchainTransferDst = framegenRequested && transferDstCapable;
-        framegenSupported = transferDstCapable && compositeFormatSupported();
-    }
+    bool transferDstCapable = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
+    swapchainTransferDst = framegenRequested && transferDstCapable;
+    framegenSupported = transferDstCapable && compositeFormatSupported();
 
     uint32_t pmCount=0;
     vk_.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice,surface,&pmCount,nullptr);
@@ -401,16 +399,14 @@ void VulkanRendererContext::createSwapchain() {
         if (vk_.CreateImageView(device,&vi,nullptr,&swapchainViews[i])!=VK_SUCCESS) throw std::runtime_error("imgview");
     }
 
-    if (framegenArmed) {
-        for (auto s : swapchainRenderFinished) {
-            if (s != VK_NULL_HANDLE) vk_.DestroySemaphore(device, s, nullptr);
-        }
-        swapchainRenderFinished.resize(imgCount);
-        VkSemaphoreCreateInfo sci{}; sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        for (size_t i = 0; i < imgCount; i++) {
-            if (vk_.CreateSemaphore(device, &sci, nullptr, &swapchainRenderFinished[i]) != VK_SUCCESS)
-                throw std::runtime_error("swapchain sem");
-        }
+    for (auto s : swapchainRenderFinished) {
+        if (s != VK_NULL_HANDLE) vk_.DestroySemaphore(device, s, nullptr);
+    }
+    swapchainRenderFinished.resize(imgCount);
+    VkSemaphoreCreateInfo sci{}; sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    for (size_t i = 0; i < imgCount; i++) {
+        if (vk_.CreateSemaphore(device, &sci, nullptr, &swapchainRenderFinished[i]) != VK_SUCCESS)
+            throw std::runtime_error("swapchain sem");
     }
 }
 
@@ -545,7 +541,6 @@ void VulkanRendererContext::createSyncObjects() {
         if (vk_.CreateSemaphore(device,&si,nullptr,&imgAvailSems[i])!=VK_SUCCESS||
             vk_.CreateSemaphore(device,&si,nullptr,&renderDoneSems[i])!=VK_SUCCESS||
             vk_.CreateFence(device,&fi,nullptr,&inFlightFences[i])!=VK_SUCCESS) throw std::runtime_error("sync");
-        if (!framegenArmed) continue;
         for (uint32_t g = 0; g < VKR_LSFG_MAX_GENERATIONS; g++) {
             if (vk_.CreateSemaphore(device, &si, nullptr, &imgAvailGenSems[i][g]) != VK_SUCCESS)
                 throw std::runtime_error("sync gen");
@@ -554,13 +549,11 @@ void VulkanRendererContext::createSyncObjects() {
 }
 
 void VulkanRendererContext::cleanupSwapchain() {
-    if (framegenArmed) {
-        destroyCompositeTargets();
-        for (auto s : swapchainRenderFinished) {
-            if (s != VK_NULL_HANDLE) vk_.DestroySemaphore(device, s, nullptr);
-        }
-        swapchainRenderFinished.clear();
+    destroyCompositeTargets();
+    for (auto s : swapchainRenderFinished) {
+        if (s != VK_NULL_HANDLE) vk_.DestroySemaphore(device, s, nullptr);
     }
+    swapchainRenderFinished.clear();
     for (auto fb:swapchainFBs) vk_.DestroyFramebuffer(device,fb,nullptr); swapchainFBs.clear();
     for (auto iv:swapchainViews) vk_.DestroyImageView(device,iv,nullptr); swapchainViews.clear();
     if (!cmdBufs.empty()){vk_.FreeCommandBuffers(device,cmdPool,(uint32_t)cmdBufs.size(),cmdBufs.data());cmdBufs.clear();}
@@ -1402,46 +1395,8 @@ ok=true;}catch(...){}
 
     VkResult endStatus = vk_.EndCommandBuffer(cmdBufs[currentFrame]);
     if (endStatus != VK_SUCCESS) {
-        if (!framegenArmed) {
-            RLOG_E("recordCmdBuf: EndCommandBuffer failed with status=%d (swapRB=%d draws=%zu imgIdx=%u)",
-                (int)endStatus, (int)swapRB, frameDraws.size(), imgIdx);
-            throw std::runtime_error("end cb");
-        }
         RLOG_E("renderFrame: EndCommandBuffer failed status=%d", (int)endStatus);
         recoverAcquiredFrame();
-        return;
-    }
-
-    if (!framegenArmed) {
-        VkSemaphore wSem[]={imgAvailSems[currentFrame]}, sSem[]={renderDoneSems[currentFrame]};
-        VkPipelineStageFlags wStage[]={VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        VkSubmitInfo si{}; si.sType=VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        if (!toXr) {
-            si.waitSemaphoreCount=1; si.pWaitSemaphores=wSem; si.pWaitDstStageMask=wStage;
-            si.signalSemaphoreCount=1; si.pSignalSemaphores=sSem;
-        }
-        si.commandBufferCount=1; si.pCommandBuffers=&cmdBufs[currentFrame];
-
-        vk_.ResetFences(device,1,&inFlightFences[currentFrame]);
-        if (vk_.QueueSubmit(graphicsQueue,1,&si,inFlightFences[currentFrame])!=VK_SUCCESS) {
-            vk_.DestroyFence(device,inFlightFences[currentFrame],nullptr);
-            VkFenceCreateInfo fi{}; fi.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO; fi.flags=VK_FENCE_CREATE_SIGNALED_BIT;
-            vk_.CreateFence(device,&fi,nullptr,&inFlightFences[currentFrame]);
-            return;
-        }
-        if (!toXr) {
-            VkSwapchainKHR scs[]={swapchain};
-            VkPresentInfoKHR pi{}; pi.sType=VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-            pi.waitSemaphoreCount=1; pi.pWaitSemaphores=sSem; pi.swapchainCount=1; pi.pSwapchains=scs; pi.pImageIndices=&imgIdx;
-            res=vk_.QueuePresentKHR(graphicsQueue,&pi);
-            if (res==VK_ERROR_OUT_OF_DATE_KHR||res==VK_ERROR_SURFACE_LOST_KHR) fbResized.store(true);
-        } else {
-            // The XR session samples xrAhb from its own GL context with no fence handoff;
-            // blocking here means the buffer is fully written whenever this thread is idle,
-            // leaving only the active write window unsynchronized (a tear, not stale data).
-            vk_.WaitForFences(device,1,&inFlightFences[currentFrame],VK_TRUE,UINT64_MAX);
-        }
-        currentFrame=(currentFrame+1)%MAX_FRAMES_IN_FLIGHT;
         return;
     }
 
