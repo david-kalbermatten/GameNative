@@ -17,6 +17,24 @@ static char* copy_utf(JNIEnv* env, jstring value) {
     return copy;
 }
 
+JNIEXPORT jint JNICALL LSFG_FN(nativeValidateDll)(JNIEnv* env, jclass clazz, jstring dllPath) {
+    (void)clazz;
+    char* path = copy_utf(env, dllPath);
+    if (!path) return (jint)LSFG_NOT_INSTALLED;
+    const LsfgStatus status = lsfg_validate_dll(path);
+    free(path);
+    return (jint)status;
+}
+
+JNIEXPORT jint JNICALL LSFG_FN(nativeDllVariant)(JNIEnv* env, jclass clazz, jstring dllPath) {
+    (void)clazz;
+    char* path = copy_utf(env, dllPath);
+    if (!path) return (jint)LSFG_VARIANT_NONE;
+    const LsfgVariant variant = lsfg_dll_variant(path);
+    free(path);
+    return (jint)variant;
+}
+
 JNIEXPORT jint JNICALL LSFG_FN(nativeBuildCache)(JNIEnv* env, jclass clazz, jstring dllPath,
                                                  jstring cachePath, jboolean preferFp16) {
     (void)clazz;
@@ -41,6 +59,33 @@ JNIEXPORT jboolean JNICALL LSFG_FN(nativeCacheMatchesSource)(JNIEnv* env, jclass
     free(cache);
     free(dll);
     return matches ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL LSFG_FN(nativeInspectCache)(JNIEnv* env, jclass clazz, jstring cachePath) {
+    (void)clazz;
+    char* cache = copy_utf(env, cachePath);
+    if (!cache) return (jint)LSFG_NOT_INSTALLED;
+
+    LsfgModuleSet set;
+    const LsfgStatus status = lsfg_load_modules(cache, &set);
+    if (status == LSFG_OK) lsfg_release_modules(&set);
+    free(cache);
+    return (jint)status;
+}
+
+JNIEXPORT jint JNICALL LSFG_FN(nativeCacheVariant)(JNIEnv* env, jclass clazz, jstring cachePath) {
+    (void)clazz;
+    char* cache = copy_utf(env, cachePath);
+    if (!cache) return (jint)LSFG_VARIANT_NONE;
+
+    LsfgModuleSet set;
+    LsfgVariant variant = LSFG_VARIANT_NONE;
+    if (lsfg_load_modules(cache, &set) == LSFG_OK) {
+        variant = set.variant;
+        lsfg_release_modules(&set);
+    }
+    free(cache);
+    return (jint)variant;
 }
 
 JNIEXPORT jboolean JNICALL LSFG_FN(nativeSupportsFrameGeneration)(JNIEnv* env, jclass clazz,

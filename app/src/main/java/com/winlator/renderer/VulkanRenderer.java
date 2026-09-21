@@ -198,6 +198,7 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
     private int frameGenFlowScalePct = 70;
     private float frameGenRefreshRate = 60.0f;
     private String frameGenShadersCachePath = null;
+    private int frameGenStateGeneration = 0;
 
     private static volatile boolean gpuImageChecked = false;
 
@@ -891,17 +892,53 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
     }
 
     public void setFrameGenerationEnabled(boolean enabled) {
+        String resolvedCachePath = null;
+        int generation;
+        Context ctx = null;
+
         synchronized (lock) {
-            this.frameGenEnabled = enabled;
-            boolean wasRequireCompositor = effectsRequireCompositor;
-            effectsRequireCompositor = computeEffectsRequireCompositor();
-            if (nativeHandle != 0) {
-                nativeSetFrameGenerationEnabled(nativeHandle, enabled);
+            generation = ++frameGenStateGeneration;
+            if (!enabled) {
+                applyFrameGenerationEnabledLocked(false);
+                return;
             }
-            if (nativeMode && wasRequireCompositor != effectsRequireCompositor) {
-                if (effectsRequireCompositor) tearDownScanout();
-                else establishScanout();
+            if (frameGenShadersCachePath == null && xServerView != null) {
+                ctx = xServerView.getContext();
             }
+        }
+
+        if (ctx != null) {
+            String driver = driverPath != null ? driverPath : driverLibraryName;
+            java.io.File cache = com.winlator.renderer.lsfg.LosslessScaling.resolveOrBuildCache(ctx, null, driver, true);
+            if (cache != null && cache.isFile()) {
+                resolvedCachePath = cache.getAbsolutePath();
+            }
+        }
+
+        synchronized (lock) {
+            if (resolvedCachePath != null && frameGenShadersCachePath == null) {
+                frameGenShadersCachePath = resolvedCachePath;
+                if (nativeHandle != 0) {
+                    nativeSetFrameGenerationShaders(nativeHandle, frameGenShadersCachePath);
+                }
+            }
+            if (generation != frameGenStateGeneration) {
+                return;
+            }
+            applyFrameGenerationEnabledLocked(true);
+        }
+    }
+
+    private void applyFrameGenerationEnabledLocked(boolean enabled) {
+        this.frameGenEnabled = enabled;
+        boolean wasRequireCompositor = effectsRequireCompositor;
+        effectsRequireCompositor = computeEffectsRequireCompositor();
+        if (nativeHandle != 0) {
+            nativeSetFrameGenerationEnabled(nativeHandle, enabled);
+        }
+        if (nativeMode && wasRequireCompositor != effectsRequireCompositor) {
+            if (effectsRequireCompositor) tearDownScanout();
+            else establishScanout();
         }
     }
 
@@ -911,6 +948,12 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
                 return nativeIsFrameGenerationSupported(nativeHandle);
             }
             return false;
+        }
+    }
+
+    public boolean isFrameGenerationEnabled() {
+        synchronized (lock) {
+            return frameGenEnabled;
         }
     }
 
@@ -943,6 +986,14 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
         }
     }
 
+    public void setSourceFrameCount(long count) {
+        synchronized (lock) {
+            if (nativeHandle != 0) {
+                nativeSetSourceFrameCount(nativeHandle, count);
+            }
+        }
+    }
+
     public long getGeneratedFrameCount() {
         synchronized (lock) {
             if (nativeHandle != 0) {
@@ -952,10 +1003,23 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
         }
     }
 
+    public long getPresentedFrameCount() {
+        synchronized (lock) {
+            if (nativeHandle != 0) {
+                return nativeGetPresentedFrameCount(nativeHandle);
+            }
+            return 0;
+        }
+    }
+
     public long getRealFrameCount() {
         synchronized (lock) {
             if (nativeHandle != 0) {
-                return nativeGetRealFrameCount(nativeHandle);
+                try {
+                    return nativeGetRealFrameCount(nativeHandle);
+                } catch (UnsatisfiedLinkError ignored) {
+                    return nativeGetPresentedFrameCount(nativeHandle);
+                }
             }
             return 0;
         }
@@ -964,24 +1028,11 @@ public class VulkanRenderer implements WindowManager.OnWindowModificationListene
     public long getSourceFrameCount() {
         synchronized (lock) {
             if (nativeHandle != 0) {
-                return nativeGetSourceFrameCount(nativeHandle);
-            }
-            return 0;
-        }
-    }
-
-    public void setSourceFrameCount(long count) {
-        synchronized (lock) {
-            if (nativeHandle != 0) {
-                nativeSetSourceFrameCount(nativeHandle, count);
-            }
-        }
-    }
-
-    public long getPresentedFrameCount() {
-        synchronized (lock) {
-            if (nativeHandle != 0) {
-                return nativeGetPresentedFrameCount(nativeHandle);
+                try {
+                    return nativeGetSourceFrameCount(nativeHandle);
+                } catch (UnsatisfiedLinkError ignored) {
+                    return nativeGetPresentedFrameCount(nativeHandle);
+                }
             }
             return 0;
         }
